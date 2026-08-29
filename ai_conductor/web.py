@@ -17,7 +17,9 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
-from .board import MAX_CONTENT_CHARS, MODEL_ACTORS, PUBLIC_KINDS, BoardError, BoardStore
+from .board import (
+    MAX_CONTENT_CHARS, MODEL_ACTORS, OPERATOR_ACTOR, PUBLIC_KINDS, BoardError, BoardStore,
+)
 from .budgets import collect_budgets
 from .config import expanded_path, load_config
 from .dispatch import RunCancelled, RunResult, capture_dispatch
@@ -163,7 +165,7 @@ class ConductorApp:
             "limits": {"content_chars": MAX_CONTENT_CHARS, "events_per_read": 500},
             "public_kinds": sorted(PUBLIC_KINDS),
             "trust": {
-                "posting_actor": "chris",
+                "posting_actor": OPERATOR_ACTOR,
                 "passive": True,
                 "assignments_trigger_execution": False,
                 "provider_bridge": "completed_successful_runs_only",
@@ -176,7 +178,7 @@ class ConductorApp:
         if unexpected:
             raise BoardError(f"unsupported board field: {sorted(unexpected)[0]}")
         return self.board.post(
-            actor="chris",
+            actor=OPERATOR_ACTOR,
             kind=payload.get("kind"),
             content=payload.get("content"),
             source="local_web",
@@ -231,7 +233,7 @@ class ConductorApp:
         return {"event": event, "created": created}
 
     def acknowledge_board_event(self, event_id: str) -> dict[str, Any]:
-        return self.board.acknowledge(event_id, actor="chris", source="local_web")
+        return self.board.acknowledge(event_id, actor=OPERATOR_ACTOR, source="local_web")
 
     def create_chat(self, payload: dict[str, Any]) -> dict[str, Any]:
         provider = str(payload.get("provider") or "auto")

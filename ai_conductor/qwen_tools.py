@@ -65,7 +65,7 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "type": "function",
         "function": {
             "name": "shell",
-            "description": "Run a Bash command in the workspace. The filesystem is read-only outside the workspace and /tmp.",
+            "description": "Run a sandboxed Bash command. Only workspace writes persist; home data is hidden and /tmp is ephemeral.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -215,14 +215,39 @@ class QwenToolbox:
             "--unshare-pid",
             "--ro-bind", "/", "/",
             "--tmpfs", "/tmp",
-            # Put the workspace bind after /tmp so a workspace rooted below /tmp
-            # remains visible and writable (useful for temporary test repositories).
-            "--bind", str(self.cwd), str(self.cwd),
+            "--tmpfs", "/run",
+            "--dir", "/tmp/home",
             "--dev", "/dev",
             "--proc", "/proc",
+        ]
+        if not self.config.get("shell_network", False):
+            argv.append("--unshare-net")
+
+        # A read-only root still exposes every operator-readable credential and
+        # document. Hide the home directory, then mount back only the selected
+        # workspace. If the operator deliberately selects their entire home as
+        # the workspace, that explicit scope wins.
+        home = Path.home().resolve()
+        if self.cwd != home:
+            argv.extend(["--tmpfs", str(home)])
+            if home in self.cwd.parents:
+                argv.extend(["--dir", str(self.cwd)])
+
+        # Put the workspace bind after /tmp and the home mask so workspaces below
+        # either location remain visible and writable.
+        argv.extend([
+            "--bind", str(self.cwd), str(self.cwd),
             "--chdir", str(self.cwd),
             "/bin/bash", "-lc", command,
-        ]
+        ])
+        environment = {
+            "HOME": "/tmp/home",
+            "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+            "TMPDIR": "/tmp",
+        }
+        for name in ("LANG", "LANGUAGE", "LC_ALL", "LC_CTYPE", "TERM", "TZ"):
+            if name in os.environ:
+                environment[name] = os.environ[name]
         try:
             completed = subprocess.run(
                 argv,
@@ -230,7 +255,7 @@ class QwenToolbox:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 timeout=timeout,
-                env=os.environ.copy(),
+                env=environment,
             )
         except subprocess.TimeoutExpired as exc:
             partial = exc.stdout or ""

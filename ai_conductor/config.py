@@ -33,8 +33,8 @@ DEFAULTS: dict[str, Any] = {
         "base_url": "http://127.0.0.1:8080/v1",
         "health_url": "http://127.0.0.1:8080/health",
         "model": "qwen3-coder-next",
-        "auto_start": True,
-        "start_command": ["/opt/llm/serve.sh", "start", "code"],
+        "auto_start": False,
+        "start_command": [],
         "start_timeout_seconds": 120,
         "route_max_tokens": 256,
         "agent_max_tokens": 4096,
@@ -44,6 +44,7 @@ DEFAULTS: dict[str, Any] = {
         "file_limit_bytes": 1000000,
         "shell_timeout_seconds": 120,
         "shell_max_timeout_seconds": 600,
+        "shell_network": False,
     },
     "claude": {
         "command": "claude",
@@ -53,6 +54,7 @@ DEFAULTS: dict[str, Any] = {
         "budget_cache": "~/.cache/ai-conductor/claude-budget.json",
         "budget_stale_seconds": 600,
         "request_timeout_seconds": 1800,
+        "statusline_command": [],
     },
     "codex": {
         "command": "codex",

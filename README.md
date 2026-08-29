@@ -1,131 +1,136 @@
 # AI Conductor
 
-A local Claude-style chat interface for Qwen, Claude Code, and Codex. Qwen receives each new
-auto-routed request plus normalized provider budgets, then either handles the work locally or
-delegates it to Claude Code or Codex. The selected provider's answer is delivered without a
-second-model review. Gemini is not used.
+AI Conductor is a local, Qwen-routed interface for Qwen, Claude Code, and Codex. Qwen receives
+each auto-routed request with normalized provider budgets, then handles the work locally or
+delegates it to a hosted CLI. The selected provider's answer is returned directly, without a
+second-model review.
 
-In **Qwen decides** mode, every turn is routed independently. If Qwen selects the current provider,
-Conductor resumes that provider's session; a self-contained follow-up can switch providers without
-rewriting the provider menu. Choosing a provider explicitly starts or resumes that provider for the
-next turn.
+The project currently targets Linux and Python 3.12 or later. Qwen shell tools require
+[Bubblewrap](https://github.com/containers/bubblewrap); Claude Code and Codex require their
+respective authenticated CLIs. The Python application itself has no third-party package
+dependencies.
 
-## Start
+## Install and configure
 
-```bash
-~/ai-conductor/bin/conductor
-```
-
-This starts the local interface at `http://127.0.0.1:8765` and opens it in your browser. Chats,
-project folders, routing decisions, and provider sessions persist locally. To keep using the
-terminal UI instead:
+Clone the repository wherever you prefer, then create a local configuration:
 
 ```bash
-~/ai-conductor/bin/conductor repl
+git clone https://github.com/PilferedParrot/ai-conductor.git
+cd ai-conductor
+cp config.example.json config.json
 ```
 
-Useful non-interactive commands:
+`config.json` is intentionally ignored so machine-specific commands and paths are not committed.
+The committed example leaves Qwen auto-start disabled. Either start your OpenAI-compatible Qwen
+server yourself, or set `qwen.auto_start` to `true` and provide `qwen.start_command` as an argument
+array. Adjust the endpoint, model name, provider commands, stores, and routing reserves as needed;
+all available defaults are in `ai_conductor/config.py`.
+
+Start the browser interface:
 
 ```bash
-~/ai-conductor/bin/conductor budget
-~/ai-conductor/bin/conductor route "inspect this repository for the cause of the failing tests"
-~/ai-conductor/bin/conductor run --provider codex "implement the agreed fix"
+./bin/conductor
 ```
 
-The first automatic route starts the stock Qwen code profile when needed. The existing local
-idle watchdog remains responsible for releasing its VRAM.
+It listens on `http://127.0.0.1:8765` and opens a browser. Chats, routing decisions, provider
+sessions, and board events persist under `~/.local/state/ai-conductor/` by default. Other modes:
+
+```bash
+./bin/conductor repl
+./bin/conductor budget
+./bin/conductor route "inspect this repository for the cause of the failing tests"
+./bin/conductor run --provider codex "implement the agreed fix"
+```
+
+`bin/conductor-gui` is suitable for a desktop launcher. It finds the adjacent `conductor` script,
+so the checkout can be moved without editing the launcher.
 
 ## Claude budget telemetry
 
-Claude Code supplies the exact five-hour used percentage to its statusline process. The included
-wrapper caches that value and then calls the existing statusline unchanged. Activate it by setting:
+Claude Code supplies the exact five-hour usage percentage to its statusline process. The included
+wrapper caches that value. Configure Claude Code with the absolute path to the wrapper in your own
+checkout, for example:
 
 ```json
 "statusLine": {
   "type": "command",
-  "command": "/opt/ai-conductor/bin/claude-statusline"
+  "command": "/path/to/ai-conductor/bin/claude-statusline"
 }
 ```
 
-Until Claude renders a statusline after activation, the conductor reports its subscription budget
-as unknown. Unknown budgets are eligible by default; edit `config.json` to change reserves or that
-policy. If `claude auth status` reports that the CLI is signed out, Claude is excluded from automatic
-routing until you complete one interactive `claude` login.
+If you already use a statusline, set `claude.statusline_command` in `config.json` to its argument
+array. The wrapper forwards the original JSON on standard input without invoking a shell:
 
-Codex quota telemetry comes directly from `codex app-server`'s `account/rateLimits/read` method.
-No API key is used; it uses the Codex CLI's existing ChatGPT authentication.
+```json
+{
+  "claude": {
+    "statusline_command": ["python3", "/path/to/existing/statusline.py"]
+  }
+}
+```
 
-## Qwen coding tools
+Until Claude renders a statusline, its budget is unknown. Unknown budgets are eligible by default.
+If `claude auth status` reports that the CLI is signed out, Claude is excluded from automatic
+routing until login succeeds. Codex quota telemetry comes from `codex app-server` using the Codex
+CLI's existing ChatGPT authentication; no API key is read by AI Conductor.
 
-When Qwen is selected it now runs an agent loop with native tool calls. It can read, create, and
-edit files under `--cwd`, execute Bash commands, and inspect the current Git diff. Shell commands
-run in a Bubblewrap sandbox: the selected workspace and `/tmp` are writable while the rest of the
-host filesystem is read-only. Tool output, file size, command duration, and loop length are capped
-in the Qwen defaults in `ai_conductor/config.py`.
+## Routing and tools
 
-`bubblewrap` (`bwrap`) must be installed for Qwen shell calls. File and diff tools continue to work
-without it; a shell attempt will return a tool error to the model.
+In **Qwen decides** mode, each turn is routed independently using capability fit and live
+Claude/Codex subscription percentages. If Qwen chooses the current provider, Conductor resumes
+that provider session. A self-contained follow-up may switch providers. An explicit provider
+selection starts or resumes that provider for the next turn.
 
-## Routing and interface
+When selected, Qwen runs an agent loop with file, shell, and Git diff tools. File tools restrict
+paths to the selected workspace. Shell commands run under Bubblewrap with the workspace and a
+temporary directory writable, the operator's home data hidden, sensitive environment variables
+removed, networking disabled by default, and the remainder of the host filesystem read-only. Set
+`qwen.shell_network` to `true` only when a task needs network access or the host does not permit an
+unprivileged network namespace. Tool output, file size, command duration, and loop length are
+capped. Bubblewrap is a containment boundary, not a substitute for
+reviewing model-authored commands or running untrusted projects in a disposable VM.
 
-- In **Qwen decides** mode, Qwen routes every turn using capability fit and the live Claude/Codex
-  subscription percentages. Existing provider context is one routing input, not a pin.
-- Qwen can keep suitable work local and has file, shell, and diff tools.
-- Claude Code and Codex keep resumable provider sessions in both the browser and terminal UIs.
-- The browser UI includes chat history, project-folder selection, provider overrides, availability
-  and quota indicators, responsive mobile layout, and local persistence.
-- Responses run as background jobs. The browser polls their state, exposes a Cancel button, and
-  recovers interrupted responses after a server restart, so a lost browser fetch cannot leave a
-  conversation permanently locked.
-- Claude and Codex must pass CLI authentication checks before automatic routing can select them. If
-  an automatically selected hosted CLI cannot start a turn, Qwen handles it locally; explicit
-  provider selections report the failure instead of silently changing providers.
-- Provider output is not sent to another model for checking.
+Claude Code and Codex retain their own sandbox, authentication, and approval behavior. AI
+Conductor does not weaken those controls. Automatic routing falls back to local Qwen if a selected
+hosted CLI cannot begin a turn; explicit selections report the failure.
 
 ## Local message board
 
-The browser includes a small append-only collaboration board for Chris, Conductor, Claude, Qwen,
-and Codex. It is intentionally separate from chat and routing: board reads, posts, assignments,
-security reports, and acknowledgements cannot invoke or resume a provider. An assignment becomes
-real work only when Chris or Conductor separately submits it through the normal monitored routing
-path, where live budget and sandbox controls still apply.
+The browser includes an append-only board for the local Operator, Conductor, Claude, Qwen, and
+Codex. It is separate from routing: board reads, posts, assignments, security reports, and
+acknowledgements cannot invoke or resume a provider. An assignment becomes work only when the
+Operator or Conductor separately submits it through the normal monitored routing path.
 
-Board events are stored as private UTF-8 JSON Lines in
-`~/.local/state/ai-conductor/board.jsonl`. Each event has an immutable ID, UTC timestamp, actor,
-kind, source interface, status, and content. There is no edit or delete API. Browser posts are
-always attributed to Chris, and the in-process control path can only speak as Conductor. A model
-identity can enter the board only through the one-way provider-result bridge: Chris selects an
-already completed, successful assistant message, and Conductor derives the actor, exact content,
-run ID, chat ID, and message ID from persisted monitored-run state. The request cannot provide or
-edit those fields. Repeating the publication is idempotent, including across concurrent processes.
-Only Chris and Conductor may author assignments or acknowledge security events.
+Events are private UTF-8 JSON Lines in `~/.local/state/ai-conductor/board.jsonl`. Browser posts are
+attributed to Operator; the trusted in-process path can speak only as Conductor. A model identity
+can enter the board only through the one-way provider-result bridge, which derives the actor,
+exact response, and run provenance from a completed successful message. Existing logs that used
+the former personalized operator identifier remain readable and are labeled as legacy events.
 
-The bridge does not work in reverse. It never copies board content into a prompt, and publishing a
-result never starts, resumes, routes, or dispatches a provider. Legacy responses, running,
-cancelled, interrupted, or failed responses, and messages without a Conductor run ID cannot be
-published as model-authored events. The normal board validation still applies, so suspicious
-provider output is quarantined and audited rather than becoming an instruction channel.
+The bridge never copies board content into a prompt or starts work. Suspicious provider output is
+quarantined and audited. Posts are limited to 2,000 normalized plain-text characters; hidden
+Unicode, active content, code fences, encoded payloads, unsupported fields, prompt overrides,
+cross-participant instructions, and impersonation attempts are rejected or quarantined.
 
-The server accepts at most 2,000 characters of normalized, human-readable plain text per post. It
-rejects controls and hidden Unicode, HTML/active content, code fences, long encoded blobs, and
-unsupported fields. Likely prompt overrides, cross-participant instructions, or impersonation are
-preserved with `quarantined` status and generate a separate append-only security report; they are
-never acted upon. The UI renders board content as escaped text. Writes are serialized with both an
-in-process lock and an OS file lock, appended with `O_APPEND`, flushed to disk, and capped at 10 MB.
+Mutation endpoints require a per-server CSRF token plus loopback peer, Host, and Origin checks.
+This is a local single-operator boundary, not multi-user authentication: processes running as the
+same OS account can read the local state and interact with the loopback service. Keep `web.host` on
+`127.0.0.1`; do not expose the service through a proxy, container port, or LAN listener without
+adding authentication and transport security.
 
-Board mutation endpoints require a per-server CSRF token plus loopback peer, Host, and Origin
-checks. This is a local single-operator boundary, not multi-user authentication: other processes
-running as the same OS account can still read the private state and interact with the loopback
-service. Keep `web.host` on its default `127.0.0.1`; do not expose Conductor through a proxy or LAN
-listener without adding real authentication and transport security.
+## Development and security
 
-HTTP endpoints:
+Run the same checks used by CI:
 
-- `GET /api/board?limit=200` reads recent events (maximum 500).
-- `POST /api/board/events` accepts only `kind` and `content`; the browser sends the CSRF token
-  returned by `GET /api/state` in `X-Conductor-CSRF`.
-- `POST /api/board/events/<id>/acknowledge` appends an acknowledgement; it never changes the
-  original event.
-- `POST /api/chats/<chat-id>/messages/<message-id>/publish` accepts only an optional model-safe
-  `kind` (the UI uses `result`) and publishes the exact successful response once. It requires the
-  same local and CSRF controls as other board mutations.
+```bash
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s tests -v
+python3 -m compileall -q ai_conductor tests
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution policy, [SECURITY.md](SECURITY.md) for the
+security model and private reporting instructions, and [POLICY.md](POLICY.md) for provider and
+message-board trust rules.
+
+## License
+
+AI Conductor is available under the [MIT License](LICENSE).

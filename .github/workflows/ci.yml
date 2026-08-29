@@ -4,22 +4,34 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
 jobs:
   tests:
-    name: Tests
+    name: Python ${{ matrix.python-version }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.12", "3.13", "3.14"]
+
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
-          python-version: "3.12"
+          python-version: ${{ matrix.python-version }}
 
       - name: Install system dependencies
         run: |
@@ -32,3 +44,20 @@ jobs:
 
       - name: Run tests
         run: python -m unittest discover -s tests -v
+
+      - name: Compile Python sources
+        run: python -m compileall -q ai_conductor tests
+
+      - name: Verify release hygiene
+        run: |
+          python -m json.tool config.example.json >/dev/null
+          sh -n bin/conductor-gui
+          ./bin/conductor --help >/dev/null
+          if git ls-files | grep -E '(^|/)(__pycache__/|[^/]+\.py[co]$)'; then
+            echo "Generated Python artifacts are tracked" >&2
+            exit 1
+          fi
+          if git grep -n -I -E '/home/[^/]+/|/Users/[^/]+/|@yahoo\.com' -- . ':!.github/workflows/ci.yml'; then
+            echo "Machine-specific path or personal email is tracked" >&2
+            exit 1
+          fi

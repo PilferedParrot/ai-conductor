@@ -12,7 +12,10 @@ from threading import RLock
 from typing import Any
 
 
-ACTORS = frozenset({"chris", "conductor", "claude", "qwen", "codex"})
+OPERATOR_ACTOR = "operator"
+LEGACY_OPERATOR_ACTOR = "chris"
+OPERATOR_ACTORS = frozenset({OPERATOR_ACTOR, LEGACY_OPERATOR_ACTOR})
+ACTORS = OPERATOR_ACTORS | frozenset({"conductor", "claude", "qwen", "codex"})
 MODEL_ACTORS = frozenset({"claude", "qwen", "codex"})
 PUBLIC_KINDS = frozenset({
     "observation", "proposal", "decision", "result", "question", "status",
@@ -96,7 +99,7 @@ def _suspicion(content: str, *, actor: str, kind: str) -> str | None:
         if pattern.search(content):
             # A trusted assignment may name a participant and describe work, but
             # prompt overrides and impersonation are never normal board content.
-            if kind == "assignment" and actor in {"chris", "conductor"} \
+            if kind == "assignment" and actor in OPERATOR_ACTORS | {"conductor"} \
                     and reason == "cross-participant instruction":
                 continue
             return reason
@@ -140,12 +143,12 @@ class BoardStore:
             raise BoardError("unsupported board message kind")
         if source not in {"local_web", "conductor_control"}:
             raise BoardError("unsupported board source")
-        if source == "local_web" and actor != "chris":
-            raise BoardError("the local web interface may only author messages as Chris")
+        if source == "local_web" and actor != OPERATOR_ACTOR:
+            raise BoardError("the local web interface may only author messages as Operator")
         if source == "conductor_control" and actor != "conductor":
             raise BoardError("the trusted control path may only author messages as Conductor")
-        if kind == "assignment" and actor not in {"chris", "conductor"}:
-            raise BoardError("only Chris or Conductor may author assignments")
+        if kind == "assignment" and actor not in {OPERATOR_ACTOR, "conductor"}:
+            raise BoardError("only Operator or Conductor may author assignments")
 
         clean = _validate_content(content)
         reason = _suspicion(clean, actor=actor, kind=kind)
@@ -241,10 +244,10 @@ class BoardStore:
         return result, True
 
     def acknowledge(self, event_id: str, *, actor: str, source: str) -> dict[str, Any]:
-        if actor not in {"chris", "conductor"}:
-            raise BoardError("only Chris or Conductor may acknowledge security events")
+        if actor not in {OPERATOR_ACTOR, "conductor"}:
+            raise BoardError("only Operator or Conductor may acknowledge security events")
         if (source, actor) not in {
-            ("local_web", "chris"), ("conductor_control", "conductor"),
+            ("local_web", OPERATOR_ACTOR), ("conductor_control", "conductor"),
         }:
             raise BoardError("unsupported board source")
         if not isinstance(event_id, str) or not _EVENT_ID.fullmatch(event_id):
@@ -391,7 +394,7 @@ class BoardStore:
             )
         if any(provider_relations):
             return False
-        if event["source"] == "local_web" and event["actor"] != "chris":
+        if event["source"] == "local_web" and event["actor"] not in OPERATOR_ACTORS:
             return False
         if event["source"] == "conductor_control" and event["actor"] != "conductor":
             return False

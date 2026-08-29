@@ -1,0 +1,20 @@
+{
+  "qwen": {
+    "base_url": "http://127.0.0.1:8080/v1",
+    "health_url": "http://127.0.0.1:8080/health",
+    "model": "qwen3-coder-next",
+    "auto_start": false,
+    "start_command": [],
+    "shell_network": false
+  },
+  "claude": {
+    "statusline_command": []
+  },
+  "routing": {
+    "reserve_percent": {
+      "claude": 20,
+      "codex": 20
+    },
+    "allow_unknown_budget": true
+  }
+}

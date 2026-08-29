@@ -1,4 +1,5 @@
 import json
+import os
 import subprocess
 import tempfile
 import threading
@@ -15,10 +16,11 @@ from ai_conductor.budgets import (
     write_claude_cache,
 )
 from ai_conductor.board import BoardError, BoardStore
+from ai_conductor.claude_capture import _chained_statusline
 from ai_conductor.config import load_config, resolve_command
 from ai_conductor.dispatch import RunCancelled, RunResult, _capture_process
 from ai_conductor.model import STATUS_CLI_MISSING, STATUS_SIGNED_OUT, ProviderBudget, RouteDecision
-from ai_conductor.qwen import run_qwen_agent
+from ai_conductor.qwen import ensure_qwen, run_qwen_agent
 from ai_conductor.qwen_tools import QwenToolbox
 from ai_conductor.router import enforce_constraints, parse_decision
 from ai_conductor.web import ChatStore, ConductorApp, make_handler
@@ -74,6 +76,30 @@ class CommandResolutionTests(unittest.TestCase):
         if search_paths is not None:
             config["cli_search_paths"] = search_paths
         return config
+
+    def test_committed_defaults_have_no_machine_specific_start_command(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = load_config(Path(directory) / "missing.json")
+        self.assertFalse(config["qwen"]["auto_start"])
+        self.assertEqual(config["qwen"]["start_command"], [])
+        self.assertEqual(config["claude"]["statusline_command"], [])
+
+    def test_statusline_chain_is_an_argument_array(self):
+        config = load_config()
+        config["claude"]["statusline_command"] = ["python3", "~/statusline.py"]
+        command = _chained_statusline(config)
+        self.assertEqual(command[0], "python3")
+        self.assertEqual(command[1], str(Path.home() / "statusline.py"))
+        config["claude"]["statusline_command"] = "python3 ~/statusline.py"
+        self.assertEqual(_chained_statusline(config), [])
+
+    @patch("ai_conductor.qwen.qwen_available", return_value=False)
+    def test_qwen_auto_start_requires_an_explicit_command(self, _available):
+        with tempfile.TemporaryDirectory() as directory:
+            config = load_config(Path(directory) / "missing.json")
+        config["qwen"]["auto_start"] = True
+        with self.assertRaisesRegex(RuntimeError, "start_command is empty"):
+            ensure_qwen(config)
 
     def test_found_in_search_path_when_absent_from_path(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -178,6 +204,9 @@ class QwenToolTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(dir=project_root)
         self.root = Path(self.directory.name)
         self.config = load_config()["qwen"]
+        # Network namespace creation is not available in every developer
+        # environment. Isolation of files and environment remains under test.
+        self.config["shell_network"] = True
         self.tools = QwenToolbox(self.root, self.config)
 
     def tearDown(self):
@@ -197,15 +226,41 @@ class QwenToolTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             self.tools.execute("read_file", {"path": "../outside.txt"})
 
-    def test_shell_is_writable_only_in_workspace(self):
+    def test_shell_writes_outside_workspace_do_not_reach_host(self):
         outside = self.root.parent / f".{self.root.name}-outside"
         self.assertFalse(outside.exists())
         result = self.tools.execute("shell", {
             "command": f"touch allowed; touch {outside}",
         })
-        self.assertIn("exit_code: 1", result)
+        self.assertIn("exit_code: 0", result)
         self.assertTrue((self.root / "allowed").exists())
         self.assertFalse(outside.exists())
+
+    def test_shell_cannot_read_sibling_home_data(self):
+        outside = self.root.parent / f".{self.root.name}-private"
+        outside.write_text("private-security-fixture", encoding="utf-8")
+        try:
+            result = self.tools.execute("shell", {"command": f"cat {outside}"})
+        finally:
+            outside.unlink()
+        self.assertIn("exit_code: 1", result)
+        self.assertNotIn("private-security-fixture", result)
+
+    def test_shell_does_not_inherit_sensitive_environment(self):
+        with patch.dict(os.environ, {"AI_CONDUCTOR_TEST_SECRET": "security-fixture"}):
+            result = self.tools.execute("shell", {
+                "command": "printf '%s' \"${AI_CONDUCTOR_TEST_SECRET-unset}\"",
+            })
+        self.assertIn("unset", result)
+        self.assertNotIn("security-fixture", result)
+
+    @patch("ai_conductor.qwen_tools.shutil.which", return_value="/usr/bin/bwrap")
+    @patch("ai_conductor.qwen_tools.subprocess.run")
+    def test_shell_disables_network_by_default(self, run, _which):
+        run.return_value = subprocess.CompletedProcess([], 0, "")
+        self.tools.config["shell_network"] = False
+        self.tools.execute("shell", {"command": "true"})
+        self.assertIn("--unshare-net", run.call_args.args[0])
 
     @patch("ai_conductor.qwen._chat_completion")
     def test_agent_executes_tool_call_and_keeps_protocol_messages(self, complete):
@@ -463,15 +518,27 @@ class MessageBoardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             store = self._store(directory)
             event = store.post(
-                actor="chris", kind="observation", content="The focused tests pass.",
+                actor="operator", kind="observation", content="The focused tests pass.",
                 source="local_web",
             )
             loaded = store.list_events()[0]
             self.assertEqual(loaded, event)
-            self.assertEqual(loaded["actor"], "chris")
+            self.assertEqual(loaded["actor"], "operator")
             self.assertEqual(loaded["source"], "local_web")
             self.assertEqual(loaded["status"], "published")
             self.assertEqual((Path(directory) / "board.jsonl").stat().st_mode & 0o777, 0o600)
+
+    def test_legacy_named_operator_events_remain_readable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "board.jsonl"
+            store = BoardStore(path)
+            event = store.post(
+                actor="operator", kind="status", content="Existing audit record.",
+                source="local_web",
+            )
+            event["actor"] = "chris"
+            path.write_text(json.dumps(event) + "\n", encoding="utf-8")
+            self.assertEqual(BoardStore(path).list_events()[0]["actor"], "chris")
 
     def test_model_cannot_author_assignment(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -568,6 +635,7 @@ class MessageBoardTests(unittest.TestCase):
             stored = app.store.list_public()[0]["messages"][-1]
             self.assertEqual(stored["board_event_id"], event["id"])
             ledger = json.loads((Path(directory) / "runs.jsonl").read_text().strip())
+            self.assertEqual((Path(directory) / "runs.jsonl").stat().st_mode & 0o777, 0o600)
             self.assertEqual(ledger["conductor_run_id"], completed["run_id"])
             self.assertEqual(ledger["chat_id"], chat["id"])
             self.assertEqual(ledger["message_id"], completed["id"])
@@ -626,7 +694,7 @@ class MessageBoardTests(unittest.TestCase):
             for fixture in fixtures:
                 with self.subTest(fixture=fixture[:20]), self.assertRaises(BoardError):
                     store.post(
-                        actor="chris", kind="observation", content=fixture, source="local_web",
+                        actor="operator", kind="observation", content=fixture, source="local_web",
                     )
             self.assertEqual(store.list_events(), [])
 
@@ -646,7 +714,7 @@ class MessageBoardTests(unittest.TestCase):
             self.assertEqual(report["related_event_id"], event["id"])
             self.assertNotIn(event["content"], report["content"])
             acknowledgement = store.acknowledge(
-                report["id"], actor="chris", source="local_web",
+                report["id"], actor="operator", source="local_web",
             )
             self.assertEqual(acknowledgement["related_event_id"], report["id"])
             self.assertEqual(len(store.list_events()), 3)
@@ -654,7 +722,7 @@ class MessageBoardTests(unittest.TestCase):
     def test_path_product_name_does_not_become_cross_participant_instruction(self):
         """Regression for quarantined board event 24b3fc253ff34a259d95ce8220b883eb."""
         content = (
-            "Verification of the committed state in /opt/ai-conductor is complete, "
+            "Verification of the committed state in /srv/worktrees/ai-conductor is complete, "
             "read-only.\n\n"
             "HEAD is 09d50dfea03b0ad5eeb42b63e6d48368030e25ed, \"conductor: add "
             "secure board and trusted result bridge\", matching the expected 09d50df. "
@@ -699,7 +767,7 @@ class MessageBoardTests(unittest.TestCase):
             def write(index):
                 try:
                     BoardStore(path).post(
-                        actor="chris", kind="status", content=f"Worker {index} finished.",
+                        actor="operator", kind="status", content=f"Worker {index} finished.",
                         source="local_web",
                     )
                 except Exception as error:
@@ -755,7 +823,7 @@ class MessageBoardTests(unittest.TestCase):
                 state = app.board_state()
             dispatch.assert_not_called()
             route.assert_not_called()
-            self.assertEqual(created["actor"], "chris")
+            self.assertEqual(created["actor"], "operator")
             self.assertFalse(state["trust"]["assignments_trigger_execution"])
 
     def test_http_board_mutation_requires_csrf_and_loopback_control(self):

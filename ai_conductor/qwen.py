@@ -28,9 +28,15 @@ def ensure_qwen(config: dict[str, Any], notify: Callable[[str], None] = print) -
         return
     qwen = config["qwen"]
     if not qwen.get("auto_start", True):
-        raise RuntimeError("Qwen is not running")
+        raise RuntimeError(
+            "Qwen is not running; start it manually or configure qwen.start_command "
+            "and set qwen.auto_start to true"
+        )
+    command = qwen.get("start_command")
+    if not isinstance(command, list) or not command:
+        raise RuntimeError("qwen.auto_start is enabled but qwen.start_command is empty")
     notify("Qwen is down; starting the stock code profile (usually 30–60 seconds)…")
-    completed = subprocess.run(qwen["start_command"], text=True, capture_output=True)
+    completed = subprocess.run(command, text=True, capture_output=True)
     if completed.returncode and "already running" not in completed.stdout:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise RuntimeError(f"failed to start Qwen: {detail}")

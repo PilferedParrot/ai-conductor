@@ -1,15 +1,20 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
-from pathlib import Path
 
 from .budgets import write_claude_cache
 from .config import expanded_path, load_config
 
 
-LEGACY_STATUSLINE = Path("/opt/.claude/harness/statusline.py")
+def _chained_statusline(config: dict) -> list[str]:
+    command = config["claude"].get("statusline_command") or []
+    if not isinstance(command, list) or not command \
+            or not all(isinstance(part, str) and part for part in command):
+        return []
+    return [os.path.expanduser(part) for part in command]
 
 
 def main() -> int:
@@ -21,9 +26,10 @@ def main() -> int:
     config = load_config()
     if isinstance(payload, dict):
         write_claude_cache(payload, expanded_path(config["claude"]["budget_cache"]))
-    if LEGACY_STATUSLINE.exists():
+    command = _chained_statusline(config)
+    if command:
         completed = subprocess.run(
-            [sys.executable, str(LEGACY_STATUSLINE)], input=raw, text=True,
+            command, input=raw, text=True,
             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         )
         if completed.stdout:

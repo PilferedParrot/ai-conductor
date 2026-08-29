@@ -82,6 +82,10 @@ function titleCase(value) {
   return String(value).replace(/_/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function actorLabel(value) {
+  return value === "chris" ? "Operator (legacy)" : titleCase(value);
+}
+
 function renderBoard() {
   const actor = $("#boardActorFilter").value;
   const kind = $("#boardKindFilter").value;
@@ -107,7 +111,7 @@ function renderBoard() {
         ? `<span title="${escapeHtml(event.related_run_id)}">Verified run · ${escapeHtml(event.related_run_id.slice(0, 8))}</span>` : "";
     return `<article class="board-event ${security ? "security" : ""}">
       <div class="board-event-head">
-        <span class="event-actor actor-${escapeHtml(event.actor)}">${escapeHtml(titleCase(event.actor))}</span>
+        <span class="event-actor actor-${escapeHtml(event.actor)}">${escapeHtml(actorLabel(event.actor))}</span>
         <span class="event-kind">${escapeHtml(titleCase(event.kind))}</span>
         <span class="event-status status-${escapeHtml(event.status)}">${escapeHtml(titleCase(event.status))}</span>
         <time datetime="${escapeHtml(event.created_at)}">${escapeHtml(new Date(event.created_at).toLocaleString())}</time>

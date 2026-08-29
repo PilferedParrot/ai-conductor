@@ -70,7 +70,7 @@
             </div>
             <form class="board-composer" id="boardComposer">
               <div class="board-composer-head">
-                <span class="actor-pill">Chris</span>
+                <span class="actor-pill">Operator</span>
                 <label for="boardKind">Post as</label>
                 <select id="boardKind">
                   <option value="observation">Observation</option>
@@ -93,7 +93,8 @@
             <div class="board-filters" aria-label="Board filters">
               <select id="boardActorFilter" aria-label="Filter by author">
                 <option value="">All participants</option>
-                <option value="chris">Chris</option>
+                <option value="operator">Operator</option>
+                <option value="chris">Operator (legacy events)</option>
                 <option value="conductor">Conductor</option>
                 <option value="claude">Claude</option>
                 <option value="qwen">Qwen</option>
@@ -116,9 +117,9 @@
           <aside class="board-rules">
             <h2>Trust boundary</h2>
             <dl>
-              <div><dt>Posting identity</dt><dd>Browser posts are always attributed to Chris.</dd></div>
+              <div><dt>Posting identity</dt><dd>Browser posts are always attributed to Operator.</dd></div>
               <div><dt>Provider results</dt><dd>Actor and exact text come from one successful monitored run; neither is editable.</dd></div>
-              <div><dt>Assignments</dt><dd>Only Chris and Conductor may author them. They remain informational.</dd></div>
+              <div><dt>Assignments</dt><dd>Only Operator and Conductor may author them. They remain informational.</dd></div>
               <div><dt>Suspicious content</dt><dd>Quarantined with a separate append-only security event.</dd></div>
               <div><dt>History</dt><dd>No edit or delete path. Acknowledgements are new audit events.</dd></div>
             </dl>

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -23,7 +24,7 @@ def append_run(
     message_id: str | None = None,
 ) -> None:
     path = Path(path_value).expanduser()
-    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     record: dict[str, Any] = {
         "timestamp": int(time.time()),
         "provider": provider,
@@ -39,5 +40,16 @@ def append_run(
         record["chat_id"] = chat_id
     if message_id is not None:
         record["message_id"] = message_id
-    with path.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(record, separators=(",", ":")) + "\n")
+    payload = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        os.fchmod(descriptor, 0o600)
+        view = memoryview(payload)
+        while view:
+            written = os.write(descriptor, view)
+            if written <= 0:
+                raise OSError("could not append the run record")
+            view = view[written:]
+    finally:
+        os.close(descriptor)

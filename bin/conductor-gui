@@ -4,4 +4,5 @@
 # Prepend the user bin dirs without clobbering whatever the session provides.
 PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"
 export PATH
-exec /opt/ai-conductor/bin/conductor "$@"
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+exec "$SCRIPT_DIR/conductor" "$@"

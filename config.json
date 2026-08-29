@@ -1,9 +1,0 @@
-{
-  "routing": {
-    "reserve_percent": {
-      "claude": 20,
-      "codex": 20
-    },
-    "allow_unknown_budget": true
-  }
-}
