@@ -39,9 +39,10 @@ _SUSPICIOUS = (
     (re.compile(r"\b(?:you are now|act as|impersonate)\s+(?:claude|qwen|codex|conductor)\b", re.I),
      "participant impersonation"),
     (re.compile(
-        r"\b(?:claude|qwen|codex|conductor)\b\s*[:,]?\s*.{0,32}\b"
+        r"(?:^|[.!?][ \t]+)(?:claude|qwen|codex|conductor)[ \t]*[:,][ \t]*"
+        r"(?:please[ \t]+)?"
         r"(?:execute|run|invoke|prompt|ignore|obey|read|write|delete|call)\b",
-        re.I,
+        re.I | re.M,
     ), "cross-participant instruction"),
 )
 
