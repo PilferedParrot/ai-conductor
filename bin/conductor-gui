@@ -1,0 +1,7 @@
+#!/bin/sh
+# Desktop launchers start us from the session, not an interactive shell, so
+# ~/.bashrc never runs and npm-global CLIs (codex, claude) are missing from PATH.
+# Prepend the user bin dirs without clobbering whatever the session provides.
+PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"
+export PATH
+exec /opt/ai-conductor/bin/conductor "$@"

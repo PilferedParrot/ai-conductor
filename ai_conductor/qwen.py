@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -64,7 +65,8 @@ def _chat_completion(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=600) as response:
+        timeout = float(qwen.get("agent_request_timeout_seconds", 600))
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return json.load(response)["choices"][0]["message"]
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
@@ -86,6 +88,7 @@ def run_qwen_agent(
     messages: list[dict[str, Any]],
     config: dict[str, Any],
     cwd: Path,
+    cancel_event: threading.Event | None = None,
 ) -> str:
     qwen = config["qwen"]
     toolbox = QwenToolbox(cwd, qwen)
@@ -93,7 +96,13 @@ def run_qwen_agent(
     system = {"role": "system", "content": AGENT_SYSTEM_PROMPT.format(cwd=cwd)}
     max_turns = int(qwen.get("max_tool_turns", 24))
     for _turn in range(max_turns):
+        if cancel_event is not None and cancel_event.is_set():
+            from .dispatch import RunCancelled
+            raise RunCancelled("request cancelled")
         message = _chat_completion([system, *messages], config)
+        if cancel_event is not None and cancel_event.is_set():
+            from .dispatch import RunCancelled
+            raise RunCancelled("request cancelled")
         content = message.get("content") or ""
         tool_calls = []
         for index, raw_call in enumerate(message.get("tool_calls") or []):
@@ -110,6 +119,9 @@ def run_qwen_agent(
         if content.strip():
             print(content.rstrip())
         for index, call in enumerate(tool_calls):
+            if cancel_event is not None and cancel_event.is_set():
+                from .dispatch import RunCancelled
+                raise RunCancelled("request cancelled")
             function = call.get("function") or {}
             name = function.get("name", "")
             call_id = call["id"]

@@ -1,16 +1,27 @@
 # AI Conductor
 
-A small local front door for Qwen, Claude Code, and Codex. Qwen receives each new top-level
-request plus normalized provider budgets, returns one strict routing decision, and the selected
-provider's answer is delivered without a second-model review.
+A local Claude-style chat interface for Qwen, Claude Code, and Codex. Qwen receives each new
+auto-routed request plus normalized provider budgets, then either handles the work locally or
+delegates it to Claude Code or Codex. The selected provider's answer is delivered without a
+second-model review. Gemini is not used.
 
-Follow-up messages remain pinned to the selected provider so conversation context is not split
-between incompatible session stores. `/new` returns to automatic routing.
+In **Qwen decides** mode, every turn is routed independently. If Qwen selects the current provider,
+Conductor resumes that provider's session; a self-contained follow-up can switch providers without
+rewriting the provider menu. Choosing a provider explicitly starts or resumes that provider for the
+next turn.
 
 ## Start
 
 ```bash
 ~/ai-conductor/bin/conductor
+```
+
+This starts the local interface at `http://127.0.0.1:8765` and opens it in your browser. Chats,
+project folders, routing decisions, and provider sessions persist locally. To keep using the
+terminal UI instead:
+
+```bash
+~/ai-conductor/bin/conductor repl
 ```
 
 Useful non-interactive commands:
@@ -55,9 +66,66 @@ in the Qwen defaults in `ai_conductor/config.py`.
 `bubblewrap` (`bwrap`) must be installed for Qwen shell calls. File and diff tools continue to work
 without it; a shell attempt will return a tool error to the model.
 
-## Current scope
+## Routing and interface
 
-- Qwen routes once and can work as a local coding agent with file, shell, and diff tools.
-- Claude and Codex keep resumable provider sessions inside the REPL.
+- In **Qwen decides** mode, Qwen routes every turn using capability fit and the live Claude/Codex
+  subscription percentages. Existing provider context is one routing input, not a pin.
+- Qwen can keep suitable work local and has file, shell, and diff tools.
+- Claude Code and Codex keep resumable provider sessions in both the browser and terminal UIs.
+- The browser UI includes chat history, project-folder selection, provider overrides, availability
+  and quota indicators, responsive mobile layout, and local persistence.
+- Responses run as background jobs. The browser polls their state, exposes a Cancel button, and
+  recovers interrupted responses after a server restart, so a lost browser fetch cannot leave a
+  conversation permanently locked.
+- Claude and Codex must pass CLI authentication checks before automatic routing can select them. If
+  an automatically selected hosted CLI cannot start a turn, Qwen handles it locally; explicit
+  provider selections report the failure instead of silently changing providers.
 - Provider output is not sent to another model for checking.
-- A full-screen diff approval UI is still outside the current terminal interface.
+
+## Local message board
+
+The browser includes a small append-only collaboration board for Chris, Conductor, Claude, Qwen,
+and Codex. It is intentionally separate from chat and routing: board reads, posts, assignments,
+security reports, and acknowledgements cannot invoke or resume a provider. An assignment becomes
+real work only when Chris or Conductor separately submits it through the normal monitored routing
+path, where live budget and sandbox controls still apply.
+
+Board events are stored as private UTF-8 JSON Lines in
+`~/.local/state/ai-conductor/board.jsonl`. Each event has an immutable ID, UTC timestamp, actor,
+kind, source interface, status, and content. There is no edit or delete API. Browser posts are
+always attributed to Chris, and the in-process control path can only speak as Conductor. A model
+identity can enter the board only through the one-way provider-result bridge: Chris selects an
+already completed, successful assistant message, and Conductor derives the actor, exact content,
+run ID, chat ID, and message ID from persisted monitored-run state. The request cannot provide or
+edit those fields. Repeating the publication is idempotent, including across concurrent processes.
+Only Chris and Conductor may author assignments or acknowledge security events.
+
+The bridge does not work in reverse. It never copies board content into a prompt, and publishing a
+result never starts, resumes, routes, or dispatches a provider. Legacy responses, running,
+cancelled, interrupted, or failed responses, and messages without a Conductor run ID cannot be
+published as model-authored events. The normal board validation still applies, so suspicious
+provider output is quarantined and audited rather than becoming an instruction channel.
+
+The server accepts at most 2,000 characters of normalized, human-readable plain text per post. It
+rejects controls and hidden Unicode, HTML/active content, code fences, long encoded blobs, and
+unsupported fields. Likely prompt overrides, cross-participant instructions, or impersonation are
+preserved with `quarantined` status and generate a separate append-only security report; they are
+never acted upon. The UI renders board content as escaped text. Writes are serialized with both an
+in-process lock and an OS file lock, appended with `O_APPEND`, flushed to disk, and capped at 10 MB.
+
+Board mutation endpoints require a per-server CSRF token plus loopback peer, Host, and Origin
+checks. This is a local single-operator boundary, not multi-user authentication: other processes
+running as the same OS account can still read the private state and interact with the loopback
+service. Keep `web.host` on its default `127.0.0.1`; do not expose Conductor through a proxy or LAN
+listener without adding real authentication and transport security.
+
+HTTP endpoints:
+
+- `GET /api/board?limit=200` reads recent events (maximum 500).
+- `POST /api/board/events` accepts only `kind` and `content`; the browser sends the CSRF token
+  returned by `GET /api/state` in `X-Conductor-CSRF`.
+- `POST /api/board/events/<id>/acknowledge` appends an acknowledgement; it never changes the
+  original event.
+- `POST /api/chats/<chat-id>/messages/<message-id>/publish` accepts only an optional model-safe
+  `kind` (the UI uses `result`) and publishes the exact successful response once. It requires the
+  same local and CSRF controls as other board mutations.

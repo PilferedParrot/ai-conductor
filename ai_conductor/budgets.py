@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import select
-import shutil
 import subprocess
 import time
 import urllib.error
@@ -11,8 +10,14 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-from .config import expanded_path
-from .model import BudgetWindow, ProviderBudget
+from .config import expanded_path, resolve_command
+from .model import (
+    STATUS_AUTH_UNVERIFIED,
+    STATUS_CLI_MISSING,
+    STATUS_SIGNED_OUT,
+    BudgetWindow,
+    ProviderBudget,
+)
 
 
 def _number(value: Any) -> float | None:
@@ -66,18 +71,34 @@ def probe_claude_auth(command: str) -> tuple[bool | None, str]:
     return bool(payload["loggedIn"]), str(payload.get("authMethod") or "unknown")
 
 
+def _missing_note(provider: str, config: dict[str, Any]) -> str:
+    """Say what we looked for and how to fix it -- "not installed" is often a lie.
+
+    The usual cause is a launcher with a minimal PATH, not a missing install, so
+    pointing at the config knob beats implying the user needs to reinstall.
+    """
+    name = config[provider]["command"]
+    if os.sep in name or name.startswith("~"):
+        return f"{provider}.command points at {name}, which is not an executable file"
+    return (f"`{name}` was not found on PATH or in the usual install locations; "
+            f"set {provider}.command in config.json to its full path")
+
+
 def read_claude_budget(config: dict[str, Any]) -> ProviderBudget:
-    command = config["claude"]["command"]
-    if not shutil.which(command):
-        return ProviderBudget("claude", False, note="Claude CLI is not installed")
+    command = resolve_command(config, "claude")
+    if command is None:
+        return ProviderBudget("claude", False, status=STATUS_CLI_MISSING,
+                              note=_missing_note("claude", config))
 
     logged_in, detail = probe_claude_auth(command)
     if logged_in is False:
-        return ProviderBudget("claude", False, note="signed out -- run `claude auth login`")
+        return ProviderBudget("claude", False, status=STATUS_SIGNED_OUT,
+                              note="signed out -- run `claude auth login`")
     if logged_in is None:
         # Fail CLOSED, and name the blind spot rather than swallowing it. Excluding
         # Claude costs one suboptimal route; including it on a guess costs the turn.
-        return ProviderBudget("claude", False, note=f"auth unverifiable ({detail})")
+        return ProviderBudget("claude", False, status=STATUS_AUTH_UNVERIFIED,
+                              note=f"auth unverifiable ({detail})")
 
     # Auth is proven from here down, so a missing/unreadable budget cache means the
     # BUDGET is unknown -- never that the lane is dead.
@@ -126,9 +147,28 @@ def codex_budget_from_response(result: dict[str, Any], observed_at: int | None =
 
 
 def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
-    command = config["codex"]["command"]
-    if not shutil.which(command):
-        return ProviderBudget("codex", False, note="Codex CLI is not installed")
+    command = resolve_command(config, "codex")
+    if command is None:
+        return ProviderBudget("codex", False, status=STATUS_CLI_MISSING,
+                              note=_missing_note("codex", config))
+    try:
+        auth = subprocess.run(
+            [command, "login", "status"], capture_output=True, text=True, timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return ProviderBudget(
+            "codex", False, status=STATUS_AUTH_UNVERIFIED,
+            note=f"auth unverifiable (`codex login status` failed: {error})",
+        )
+    auth_detail = ((auth.stdout or auth.stderr) or "").strip()
+    if auth.returncode != 0:
+        signed_out = "not logged in" in auth_detail.lower()
+        return ProviderBudget(
+            "codex", False,
+            status=STATUS_SIGNED_OUT if signed_out else STATUS_AUTH_UNVERIFIED,
+            note="signed out -- run `codex login`" if signed_out else
+                 f"auth unverifiable (`codex login status` exited {auth.returncode})",
+        )
     timeout = float(config["codex"].get("budget_timeout_seconds", 8))
     proc: subprocess.Popen[str] | None = None
     try:
@@ -143,7 +183,7 @@ def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
         assert proc.stdin is not None and proc.stdout is not None
         messages = [
             {"method": "initialize", "id": 0, "params": {"clientInfo": {
-                "name": "ai_conductor", "title": "AI Conductor", "version": "0.2.0"}}},
+                "name": "ai_conductor", "title": "AI Conductor", "version": "0.3.0"}}},
             {"method": "initialized", "params": {}},
             {"method": "account/rateLimits/read", "id": 1, "params": {}},
         ]

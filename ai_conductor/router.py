@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import re
-import urllib.error
 import urllib.request
 from typing import Any
 
@@ -33,12 +32,16 @@ Choose exactly one backend and rank the other two. Consider the request itself, 
 strengths, current quota percentages, reset times, and reserves.
 
 Qwen: local/private, bulk reading, repetitive transformations, self-contained questions.
-Claude: project continuity, writing/design judgment, nuanced product reasoning.
+Claude Code: project continuity, writing/design judgment, nuanced product reasoning.
 Codex: repository-wide implementation, debugging, testing, and autonomous engineering.
 
 Do not answer or critique the user's request. Return only the requested JSON decision.
-Do not select a provider marked unavailable. Preserve scarce hosted quota when a local model
-is sufficient, but use the strongest appropriate hosted model for consequential work.
+Do not select a provider marked unavailable. Preserve scarce hosted quota when Qwen can do the
+work well, but delegate to the strongest appropriate hosted agent for consequential work.
+Keep short follow-ups, summaries, grading, and conversational or meta-level evaluation on Qwen
+unless the request explicitly needs repository work or an existing hosted-provider session.
+The current_provider field identifies a resumable session. Prefer it when the new request depends
+on earlier provider context, but do not pin self-contained follow-ups to it.
 """
 
 
@@ -78,9 +81,18 @@ def _post_json(url: str, payload: dict[str, Any], timeout: float = 120) -> dict[
         return json.load(response)
 
 
-def ask_qwen(prompt: str, budgets: dict[str, ProviderBudget], config: dict[str, Any]) -> RouteDecision:
+def ask_qwen(
+    prompt: str,
+    budgets: dict[str, ProviderBudget],
+    config: dict[str, Any],
+    current_provider: str | None = None,
+) -> RouteDecision:
     budget_payload = {name: budget.as_dict() for name, budget in budgets.items()}
-    user_payload = json.dumps({"budgets": budget_payload, "request": prompt}, ensure_ascii=False)
+    user_payload = json.dumps({
+        "budgets": budget_payload,
+        "current_provider": current_provider,
+        "request": prompt,
+    }, ensure_ascii=False)
     qwen = config["qwen"]
     payload = {
         "model": qwen["model"],

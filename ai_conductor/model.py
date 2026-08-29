@@ -26,6 +26,20 @@ class BudgetWindow:
         }
 
 
+# Why a lane is unusable, so the UI can say something actionable instead of
+# collapsing every cause into one word. Each maps to a different user fix.
+STATUS_OK = "ok"
+STATUS_CLI_MISSING = "cli_missing"
+STATUS_SIGNED_OUT = "signed_out"
+STATUS_AUTH_UNVERIFIED = "auth_unverified"
+
+STATUS_LABELS = {
+    STATUS_CLI_MISSING: "CLI not found",
+    STATUS_SIGNED_OUT: "signed out",
+    STATUS_AUTH_UNVERIFIED: "auth unverified",
+}
+
+
 @dataclass(frozen=True)
 class ProviderBudget:
     provider: str
@@ -33,6 +47,11 @@ class ProviderBudget:
     window: BudgetWindow | None = None
     observed_at: int | None = None
     note: str | None = None
+    status: str = STATUS_OK
+
+    @property
+    def status_label(self) -> str:
+        return STATUS_LABELS.get(self.status, "unavailable")
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -41,6 +60,7 @@ class ProviderBudget:
             "window": self.window.as_dict() if self.window else None,
             "observed_at": self.observed_at,
             "note": self.note,
+            "status": self.status,
         }
 
 

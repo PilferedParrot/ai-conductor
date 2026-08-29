@@ -18,7 +18,7 @@ from .router import ask_qwen, enforce_constraints
 
 def budget_text(budget: ProviderBudget) -> str:
     if not budget.available:
-        return "unavailable"
+        return f"{budget.status_label} ({budget.note})" if budget.note else budget.status_label
     if budget.provider == "qwen":
         text = "local/no quota"
     elif budget.window:
@@ -84,7 +84,7 @@ HELP = """Commands:
 def repl(config: dict[str, Any], cwd: Path) -> int:
     conversation = Conversation()
     forced: str | None = None
-    print("AI Conductor 0.2 — Qwen routes and has local coding tools; follow-ups stay pinned.")
+    print("AI Conductor 0.3 — Qwen routes and has local coding tools; follow-ups stay pinned.")
     print("Type /help for commands. Ctrl-D exits.")
     while True:
         label = conversation.provider or forced or "auto"
@@ -123,11 +123,13 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Qwen-routed local AI coding conductor")
+    parser = argparse.ArgumentParser(description="Qwen-routed interface for Claude Code and Codex")
     parser.add_argument("--config", help="path to a JSON configuration file")
     parser.add_argument("--cwd", default=os.getcwd(), help="working directory for dispatched agents")
     sub = parser.add_subparsers(dest="command")
-    sub.add_parser("repl", help="start the interactive interface")
+    gui = sub.add_parser("gui", help="start the Claude-style web interface")
+    gui.add_argument("--no-browser", action="store_true")
+    sub.add_parser("repl", help="start the terminal interface")
     sub.add_parser("budget", help="show current provider budgets")
     route = sub.add_parser("route", help="ask Qwen to route without dispatching")
     route.add_argument("prompt", nargs="+")
@@ -143,7 +145,11 @@ def main(argv: list[str] | None = None) -> int:
     cwd = Path(args.cwd).expanduser().resolve()
     if not cwd.is_dir():
         raise SystemExit(f"not a directory: {cwd}")
-    if args.command in (None, "repl"):
+    if args.command in (None, "gui"):
+        from .web import serve
+        no_browser = bool(getattr(args, "no_browser", False))
+        return serve(config, cwd, open_browser=not no_browser)
+    if args.command == "repl":
         return repl(config, cwd)
     if args.command == "budget":
         show_budgets(collect_budgets(config))

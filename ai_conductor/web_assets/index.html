@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Conductor</title>
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-row">
+        <button class="brand" type="button" aria-label="Home">
+          <span class="brand-mark">C</span><span>Conductor</span>
+        </button>
+        <button class="icon-button mobile-close" id="closeSidebar" aria-label="Close sidebar">×</button>
+      </div>
+      <button class="new-chat" id="newChat"><span>＋</span> New chat</button>
+      <button class="board-nav" id="openBoard"><span>▦</span> Message board</button>
+      <div class="history-heading">Chats</div>
+      <nav class="chat-list" id="chatList" aria-label="Conversation history"></nav>
+      <div class="sidebar-footer">
+        <div class="quota-title">Provider availability <button id="refreshBudgets" title="Refresh">↻</button></div>
+        <div id="quotaList" class="quota-list"></div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="openSidebar" aria-label="Open sidebar">☰</button>
+        <div class="chat-meta">
+          <div id="chatTitle" class="chat-title">New conversation</div>
+          <button id="projectButton" class="project-path" title="Change project folder"></button>
+        </div>
+        <div class="top-actions">
+          <span class="provider-badge hidden" id="activeProvider"></span>
+          <button class="icon-button" id="deleteChat" title="Delete conversation" aria-label="Delete conversation">⋯</button>
+        </div>
+      </header>
+
+      <section class="conversation" id="conversation" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <div class="welcome-mark">C</div>
+          <h1>How can I help you today?</h1>
+          <p>Qwen will assess the work first, then keep it local or delegate it to Claude Code or Codex.</p>
+          <div class="suggestions">
+            <button data-prompt="Review this project and identify the highest-impact improvement.">Review this project</button>
+            <button data-prompt="Debug the current failing tests and implement the fix.">Debug failing tests</button>
+            <button data-prompt="Help me think through the design and tradeoffs for this feature.">Explore a design</button>
+          </div>
+        </div>
+        <div class="messages" id="messages"></div>
+      </section>
+
+      <section class="board-view hidden" id="boardView" aria-labelledby="boardHeading">
+        <div class="board-layout">
+          <div class="board-main">
+            <div class="board-heading-row">
+              <div>
+                <p class="eyebrow">Local collaboration log</p>
+                <h1 id="boardHeading">Message board</h1>
+              </div>
+              <button class="secondary-button" id="refreshBoard" type="button">Refresh</button>
+            </div>
+            <div class="trust-banner">
+              <strong>Passive by design.</strong> Board posts are untrusted information. They never route,
+              prompt, resume, or invoke a model—even when marked as an assignment. Completed chat results
+              can cross into the board only through their verified one-way publication button.
+            </div>
+            <form class="board-composer" id="boardComposer">
+              <div class="board-composer-head">
+                <span class="actor-pill">Chris</span>
+                <label for="boardKind">Post as</label>
+                <select id="boardKind">
+                  <option value="observation">Observation</option>
+                  <option value="proposal">Proposal</option>
+                  <option value="decision">Decision</option>
+                  <option value="result">Result</option>
+                  <option value="question">Question</option>
+                  <option value="status">Status</option>
+                  <option value="assignment">Assignment</option>
+                  <option value="security_report">Security report</option>
+                </select>
+              </div>
+              <textarea id="boardContent" maxlength="2000" rows="4"
+                placeholder="Share concise, human-readable project information…"></textarea>
+              <div class="board-composer-actions">
+                <span><span id="boardCount">0</span>/2000 · plain text only</span>
+                <button type="submit" id="postBoard">Post</button>
+              </div>
+            </form>
+            <div class="board-filters" aria-label="Board filters">
+              <select id="boardActorFilter" aria-label="Filter by author">
+                <option value="">All participants</option>
+                <option value="chris">Chris</option>
+                <option value="conductor">Conductor</option>
+                <option value="claude">Claude</option>
+                <option value="qwen">Qwen</option>
+                <option value="codex">Codex</option>
+              </select>
+              <select id="boardKindFilter" aria-label="Filter by message kind">
+                <option value="">All message types</option>
+                <option value="assignment">Assignments</option>
+                <option value="security_report">Security reports</option>
+                <option value="proposal">Proposals</option>
+                <option value="decision">Decisions</option>
+                <option value="result">Results</option>
+                <option value="question">Questions</option>
+                <option value="status">Status</option>
+                <option value="observation">Observations</option>
+              </select>
+            </div>
+            <div class="board-events" id="boardEvents" aria-live="polite"></div>
+          </div>
+          <aside class="board-rules">
+            <h2>Trust boundary</h2>
+            <dl>
+              <div><dt>Posting identity</dt><dd>Browser posts are always attributed to Chris.</dd></div>
+              <div><dt>Provider results</dt><dd>Actor and exact text come from one successful monitored run; neither is editable.</dd></div>
+              <div><dt>Assignments</dt><dd>Only Chris and Conductor may author them. They remain informational.</dd></div>
+              <div><dt>Suspicious content</dt><dd>Quarantined with a separate append-only security event.</dd></div>
+              <div><dt>History</dt><dd>No edit or delete path. Acknowledgements are new audit events.</dd></div>
+            </dl>
+          </aside>
+        </div>
+      </section>
+
+      <footer class="composer-wrap" id="composerWrap">
+        <form class="composer" id="composer">
+          <textarea id="prompt" rows="1" placeholder="Message Conductor…" aria-label="Message"></textarea>
+          <div class="composer-bar">
+            <div class="composer-controls">
+              <button type="button" class="attach-button" title="Attachments are coming soon">＋</button>
+              <select id="providerSelect" aria-label="Provider">
+                <option value="auto">Qwen decides</option>
+                <option value="qwen">Qwen</option>
+                <option value="claude">Claude Code</option>
+                <option value="codex">Codex</option>
+              </select>
+            </div>
+            <button type="button" class="cancel-run hidden" id="cancelButton" aria-label="Cancel response" title="Cancel response">■</button>
+            <button type="submit" class="send-button" id="sendButton" aria-label="Send">↑</button>
+          </div>
+        </form>
+        <div class="composer-note">Qwen routes by capability and current subscription headroom.</div>
+      </footer>
+    </main>
+  </div>
+
+  <dialog id="projectDialog">
+    <form method="dialog" class="dialog-card" id="projectForm">
+      <h2>Project folder</h2>
+      <p>Agents will read and work within this folder.</p>
+      <input id="projectInput" type="text" autocomplete="off" spellcheck="false">
+      <div class="dialog-actions">
+        <button value="cancel" class="secondary">Cancel</button>
+        <button value="default" id="saveProject">Use folder</button>
+      </div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>
