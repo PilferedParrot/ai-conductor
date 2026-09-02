@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-PROVIDERS = ("qwen", "claude", "codex")
+PROVIDERS = ("qwen", "codex")
 
 
 @dataclass(frozen=True)
@@ -12,10 +12,11 @@ class BudgetWindow:
     used_percent: float
     window_minutes: int | None = None
     resets_at: int | None = None
+    label: str | None = None
 
     @property
     def remaining_percent(self) -> float:
-        return max(0.0, 100.0 - self.used_percent)
+        return max(0.0, min(100.0, 100.0 - self.used_percent))
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -23,6 +24,7 @@ class BudgetWindow:
             "remaining_percent": self.remaining_percent,
             "window_minutes": self.window_minutes,
             "resets_at": self.resets_at,
+            "label": self.label,
         }
 
 
@@ -48,12 +50,14 @@ class ProviderBudget:
     observed_at: int | None = None
     note: str | None = None
     status: str = STATUS_OK
+    windows: tuple[BudgetWindow, ...] = ()
 
     @property
     def status_label(self) -> str:
         return STATUS_LABELS.get(self.status, "unavailable")
 
     def as_dict(self) -> dict[str, Any]:
+        windows = self.windows or ((self.window,) if self.window else ())
         return {
             "provider": self.provider,
             "available": self.available,
@@ -61,15 +65,8 @@ class ProviderBudget:
             "observed_at": self.observed_at,
             "note": self.note,
             "status": self.status,
+            "windows": [window.as_dict() for window in windows],
         }
-
-
-@dataclass(frozen=True)
-class RouteDecision:
-    backend: str
-    alternates: tuple[str, ...]
-    reason: str
-    mode: str = "work"
 
 
 @dataclass
@@ -77,8 +74,10 @@ class Conversation:
     provider: str | None = None
     provider_session_id: str | None = None
     qwen_messages: list[dict[str, Any]] = field(default_factory=list)
+    token_usage: dict[str, int] = field(default_factory=dict)
 
     def reset(self, provider: str | None = None) -> None:
         self.provider = provider
         self.provider_session_id = None
         self.qwen_messages.clear()
+        self.token_usage.clear()

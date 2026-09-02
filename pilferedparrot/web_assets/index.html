@@ -1,0 +1,130 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#0b1017">
+  <title>PilferedParrot</title>
+  <meta name="application-name" content="PilferedParrot">
+  <meta name="description" content="PilferedParrot is a local browser interface for Qwen and OpenAI Codex.">
+  <link rel="icon" href="/pilferedparrot-icon.png" type="image/png">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="shell">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand-row">
+        <button class="brand" type="button" aria-label="PilferedParrot home">
+          <img class="brand-mark" src="/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span>
+        </button>
+        <button class="icon-button mobile-close" id="closeSidebar" aria-label="Close sidebar">×</button>
+      </div>
+
+      <section class="provider-status" aria-labelledby="providerHeading">
+        <div class="section-heading">
+          <span id="providerHeading">Connections</span>
+          <button id="refreshBudgets" title="Refresh provider status" aria-label="Refresh provider status">↻</button>
+        </div>
+        <div id="providerList" class="provider-list"></div>
+      </section>
+
+      <section class="sidebar-context" aria-labelledby="sessionContextHeading">
+        <div class="history-heading" id="sessionContextHeading">Context window</div>
+        <div class="context-pie-card" id="technicalContext"></div>
+      </section>
+
+      <section class="history-group technical-history" aria-labelledby="technicalHistoryHeading">
+        <div class="history-heading" id="technicalHistoryHeading">Session history</div>
+        <nav class="chat-list" id="chatList" aria-label="Session history"></nav>
+      </section>
+    </aside>
+
+    <div class="pane-resizer sidebar-resizer" id="sidebarResizer" role="separator"
+         aria-label="Resize session sidebar" aria-orientation="vertical" tabindex="0"></div>
+
+    <main class="main" aria-label="Work session">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="openSidebar" aria-label="Open sidebar">☰</button>
+        <div class="chat-meta">
+          <div class="technical-heading">
+            <div id="chatTitle" class="chat-title">New work session</div>
+          </div>
+          <button id="projectButton" class="project-path" title="Change the folder this session is authorized to modify"></button>
+        </div>
+        <div class="top-actions">
+          <button class="new-work-session" id="newWorkSession"
+                  title="Start a new work session"
+                  aria-label="Start a new work session">
+            <span aria-hidden="true">＋</span><span>New work session</span>
+          </button>
+          <button class="open-chat-button" id="openChat" title="Open Chat in its own window" aria-label="Open Chat window">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v10H9l-4 3v-13Z"/></svg>
+            <span>Open chat</span>
+          </button>
+        </div>
+      </header>
+
+      <section class="conversation" id="conversation" aria-live="polite">
+        <div class="welcome" id="welcome">
+          <img class="welcome-mark" src="/pilferedparrot-icon.png" alt="">
+          <h1>What are we working on?</h1>
+          <p>Choose the engine yourself. PilferedParrot keeps the project, model, progress, and usage information visible while it works.</p>
+          <div class="lane-cards">
+            <button class="lane-card qwen" data-provider-choice="qwen">
+              <span class="lane-icon">Q</span>
+              <span><strong>Local Qwen</strong><small>Runs on this machine. Good for routine code work and private local tasks.</small></span>
+              <span class="lane-arrow">→</span>
+            </button>
+            <button class="lane-card codex" data-provider-choice="codex">
+              <span class="lane-icon">O</span>
+              <span><strong>OpenAI Codex</strong><small>Uses the selected Codex model and your included ChatGPT allowance.</small></span>
+              <span class="lane-arrow">→</span>
+            </button>
+          </div>
+          <div class="suggestions">
+            <button data-prompt="Review this project and identify the highest-impact improvement.">Review this project</button>
+            <button data-prompt="Debug the current failing tests and implement the fix.">Debug failing tests</button>
+            <button data-prompt="Explain how this project is structured and where I should start.">Explain this project</button>
+          </div>
+          <img class="company-logo" src="/company-logo-dark.png" alt="PilferedParrot Global Industries, makers of 3D Bumper Billiards.">
+          <p class="byline">PilferedParrot Global Industries, makers of 3D Bumper Billiards.</p>
+        </div>
+        <div class="messages" id="messages"></div>
+      </section>
+
+      <footer class="composer-wrap">
+        <form class="composer" id="composer">
+          <textarea id="prompt" rows="1" placeholder="Describe what you want done…" aria-label="Message"></textarea>
+          <div class="composer-bar">
+            <div class="composer-controls">
+              <select id="providerSelect" aria-label="Provider">
+                <option value="codex">OpenAI Codex</option>
+                <option value="qwen">Local Qwen</option>
+              </select>
+              <select id="modelSelect" aria-label="Model"></select>
+            </div>
+            <button type="button" class="cancel-run hidden" id="cancelButton" aria-label="Cancel response" title="Cancel response">■</button>
+            <button type="submit" class="send-button" id="sendButton" aria-label="Send">↑</button>
+          </div>
+        </form>
+      </footer>
+    </main>
+
+  </div>
+
+  <dialog id="projectDialog">
+    <form method="dialog" class="dialog-card" id="projectForm">
+      <h2>Project folder</h2>
+      <p>This is the primary writable folder. Codex can also write to explicitly configured additional project folders.</p>
+      <input id="projectInput" type="text" autocomplete="off" spellcheck="false">
+      <div class="dialog-actions">
+        <button value="cancel" class="secondary">Cancel</button>
+        <button value="default" id="saveProject">Use folder</button>
+      </div>
+    </form>
+  </dialog>
+  <div class="toast" id="toast"></div>
+  <script src="/app.js"></script>
+</body>
+</html>

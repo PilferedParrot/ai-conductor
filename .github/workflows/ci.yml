@@ -46,13 +46,15 @@ jobs:
         run: python -m unittest discover -s tests -v
 
       - name: Compile Python sources
-        run: python -m compileall -q ai_conductor tests
+        run: python -m compileall -q pilferedparrot tests
 
       - name: Verify release hygiene
         run: |
           python -m json.tool config.example.json >/dev/null
-          sh -n bin/conductor-gui
-          ./bin/conductor --help >/dev/null
+          sh -n bin/pilferedparrot-gui
+          sh -n bin/pilferedparrot-app-browser
+          sh -n bin/install-pilferedparrot-desktop
+          ./bin/pilferedparrot --help >/dev/null
           if git ls-files | grep -E '(^|/)(__pycache__/|[^/]+\.py[co]$)'; then
             echo "Generated Python artifacts are tracked" >&2
             exit 1

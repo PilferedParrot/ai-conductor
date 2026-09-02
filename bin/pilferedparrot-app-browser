@@ -1,0 +1,48 @@
+#!/bin/sh
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+url=${1-}
+if [ -z "$url" ]; then
+    echo "usage: pilferedparrot-app-browser URL" >&2
+    exit 2
+fi
+
+browser=
+for candidate in google-chrome-stable google-chrome chromium chromium-browser; do
+    if command -v "$candidate" >/dev/null 2>&1; then
+        browser=$candidate
+        break
+    fi
+done
+
+if [ -n "$browser" ]; then
+    state_root=${XDG_STATE_HOME:-"$HOME/.local/state"}
+    profile_dir=$state_root/pilferedparrot/chrome-profile
+    umask 077
+    mkdir -p -- "$profile_dir" || exit 1
+    browser_started_at=$(date +%s)
+    "$browser" \
+        --user-data-dir="$profile_dir" \
+        --no-first-run \
+        --no-default-browser-check \
+        --disable-background-mode \
+        --start-maximized \
+        --class=pilferedparrot \
+        --app="$url"
+    browser_status=$?
+    browser_lifetime=$(($(date +%s) - browser_started_at))
+    # Chrome returns immediately when an existing profile process accepts the
+    # window. In that case the page lifecycle signal owns shutdown; this helper
+    # must not mistake the handoff for a window that was closed.
+    if [ "$browser_lifetime" -ge 2 ]; then
+        "$SCRIPT_DIR/pilferedparrot" gui --window-closed "$url"
+    fi
+    exit "$browser_status"
+fi
+
+if command -v xdg-open >/dev/null 2>&1; then
+    exec xdg-open "$url"
+fi
+
+echo "PilferedParrot could not find Chrome, Chromium, or xdg-open" >&2
+exit 1

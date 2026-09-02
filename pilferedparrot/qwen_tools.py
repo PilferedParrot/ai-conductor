@@ -97,6 +97,11 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 class QwenToolbox:
     def __init__(self, cwd: Path, config: dict[str, Any]):
         self.cwd = cwd.resolve()
+        if self.cwd == Path.home().resolve() and not config.get("allow_home_workspace", False):
+            raise ValueError(
+                "Qwen cannot use the entire home directory unless "
+                "qwen.allow_home_workspace is explicitly enabled"
+            )
         self.config = config
         self.output_limit = int(config.get("tool_output_chars", 24_000))
         self.file_limit = int(config.get("file_limit_bytes", 1_000_000))
@@ -225,8 +230,8 @@ class QwenToolbox:
 
         # A read-only root still exposes every operator-readable credential and
         # document. Hide the home directory, then mount back only the selected
-        # workspace. If the operator deliberately selects their entire home as
-        # the workspace, that explicit scope wins.
+        # workspace. An entire-home workspace reaches this branch only after
+        # the operator enables the explicit allow_home_workspace override.
         home = Path.home().resolve()
         if self.cwd != home:
             argv.extend(["--tmpfs", str(home)])

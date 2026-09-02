@@ -1,0 +1,9 @@
+#!/bin/sh
+
+PATH="$HOME/.npm-global/bin:$HOME/.local/bin:$PATH"
+export PATH
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BROWSER="\"$SCRIPT_DIR/pilferedparrot-app-browser\" %s &"
+export BROWSER
+
+exec "$SCRIPT_DIR/pilferedparrot" "$@"

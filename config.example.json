@@ -3,18 +3,25 @@
     "base_url": "http://127.0.0.1:8080/v1",
     "health_url": "http://127.0.0.1:8080/health",
     "model": "qwen3-coder-next",
+    "model_options": ["qwen3-coder-next"],
+    "context_window_tokens": null,
+    "context_window_percent": 100,
     "auto_start": false,
     "start_command": [],
-    "shell_network": false
+    "shell_network": false,
+    "allow_home_workspace": false
   },
-  "claude": {
-    "statusline_command": []
+  "codex": {
+    "sandbox": "workspace-write",
+    "context_window_tokens": null,
+    "context_window_percent": 100,
+    "additional_write_dirs": []
   },
-  "routing": {
-    "reserve_percent": {
-      "claude": 20,
-      "codex": 20
-    },
-    "allow_unknown_budget": true
+  "web": {
+    "default_provider": "codex",
+    "chat_model": "gpt-5.6-terra",
+    "chat_reasoning_effort": "low",
+    "chat_context_warning_chars": 80000,
+    "technical_context_warning_chars": 120000
   }
 }

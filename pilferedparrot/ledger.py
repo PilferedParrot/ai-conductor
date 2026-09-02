@@ -35,7 +35,7 @@ def append_run(
         "exit_code": exit_code,
     }
     if run_id is not None:
-        record["conductor_run_id"] = run_id
+        record["pilferedparrot_run_id"] = run_id
     if chat_id is not None:
         record["chat_id"] = chat_id
     if message_id is not None:

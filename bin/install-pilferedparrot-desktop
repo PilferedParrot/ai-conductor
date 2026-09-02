@@ -1,0 +1,48 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+DATA_HOME=${XDG_DATA_HOME:-"$HOME/.local/share"}
+STATE_HOME=${XDG_STATE_HOME:-"$HOME/.local/state"}
+APPLICATION_DIR=$DATA_HOME/applications
+ICON_DIR=$DATA_HOME/icons/hicolor/512x512/apps
+ICON_PATH=$ICON_DIR/pilferedparrot.png
+mkdir -p "$APPLICATION_DIR" "$ICON_DIR"
+
+OLD_STATE_DIR=$STATE_HOME/ai-conductor
+NEW_STATE_DIR=$STATE_HOME/pilferedparrot
+if [ -d "$OLD_STATE_DIR" ]; then
+    mkdir -p "$NEW_STATE_DIR"
+    for item in chats.json runs.jsonl board.jsonl chrome-profile; do
+        if [ -e "$OLD_STATE_DIR/$item" ] && [ ! -e "$NEW_STATE_DIR/$item" ]; then
+            mv -- "$OLD_STATE_DIR/$item" "$NEW_STATE_DIR/$item"
+        fi
+    done
+    rmdir -- "$OLD_STATE_DIR" 2>/dev/null || \
+        echo "Kept non-migrated files in $OLD_STATE_DIR" >&2
+fi
+
+sed \
+    -e "s|@PREFIX@|$REPO_ROOT|g" \
+    -e "s|@HOME@|$HOME|g" \
+    -e "s|@ICON@|$ICON_PATH|g" \
+    "$REPO_ROOT/packaging/pilferedparrot.desktop.in" \
+    > "$APPLICATION_DIR/pilferedparrot.desktop"
+
+if [ -f "$REPO_ROOT/pilferedparrot/web_assets/pilferedparrot-icon.png" ]; then
+    cp "$REPO_ROOT/pilferedparrot/web_assets/pilferedparrot-icon.png" \
+       "$ICON_PATH"
+else
+    echo "warning: web icon not found; install the icon before refreshing the menu" >&2
+fi
+
+rm -f -- "$APPLICATION_DIR/ai-conductor.desktop"
+rm -f -- "$DATA_HOME/icons/hicolor/scalable/apps/ai-conductor.svg"
+if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$APPLICATION_DIR" >/dev/null 2>&1 || :
+fi
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+    gtk-update-icon-cache -f -t "$DATA_HOME/icons/hicolor" >/dev/null 2>&1 || :
+fi
+echo "Installed PilferedParrot desktop entry in $APPLICATION_DIR"

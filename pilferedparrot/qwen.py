@@ -73,7 +73,12 @@ def _chat_completion(
     try:
         timeout = float(qwen.get("agent_request_timeout_seconds", 600))
         with urllib.request.urlopen(request, timeout=timeout) as response:
-            return json.load(response)["choices"][0]["message"]
+            result = json.load(response)
+        message = dict(result["choices"][0]["message"])
+        usage = result.get("usage")
+        if isinstance(usage, dict):
+            message["_pilferedparrot_usage"] = usage
+        return message
     except urllib.error.HTTPError as exc:
         detail = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"Qwen request failed ({exc.code}): {detail}") from exc
@@ -95,6 +100,8 @@ def run_qwen_agent(
     config: dict[str, Any],
     cwd: Path,
     cancel_event: threading.Event | None = None,
+    on_progress: Callable[[str, str], None] | None = None,
+    token_usage: dict[str, int] | None = None,
 ) -> str:
     qwen = config["qwen"]
     toolbox = QwenToolbox(cwd, qwen)
@@ -106,6 +113,27 @@ def run_qwen_agent(
             from .dispatch import RunCancelled
             raise RunCancelled("request cancelled")
         message = _chat_completion([system, *messages], config)
+        raw_usage = message.pop("_pilferedparrot_usage", None)
+        if isinstance(raw_usage, dict):
+            normalized: dict[str, int] = {}
+            for key, aliases in {
+                "input_tokens": ("input_tokens", "prompt_tokens"),
+                "output_tokens": ("output_tokens", "completion_tokens"),
+            }.items():
+                raw_value = next(
+                    (raw_usage.get(alias) for alias in aliases if raw_usage.get(alias) is not None),
+                    None,
+                )
+                try:
+                    value = int(raw_value)
+                except (TypeError, ValueError):
+                    continue
+                if value >= 0:
+                    normalized[key] = value
+            if normalized:
+                if token_usage is not None:
+                    token_usage.clear()
+                    token_usage.update(normalized)
         if cancel_event is not None and cancel_event.is_set():
             from .dispatch import RunCancelled
             raise RunCancelled("request cancelled")
@@ -121,9 +149,13 @@ def run_qwen_agent(
         messages.append(assistant_message)
         if not tool_calls:
             print(content)
+            if on_progress and content.strip():
+                on_progress("commentary", content.rstrip())
             return content
         if content.strip():
             print(content.rstrip())
+            if on_progress:
+                on_progress("commentary", content.rstrip())
         for index, call in enumerate(tool_calls):
             if cancel_event is not None and cancel_event.is_set():
                 from .dispatch import RunCancelled
@@ -133,11 +165,17 @@ def run_qwen_agent(
             call_id = call["id"]
             try:
                 arguments = parse_tool_arguments(function.get("arguments", "{}"))
-                print(f"  qwen › {_tool_label(name, arguments)}")
+                label = _tool_label(name, arguments)
+                print(f"  qwen › {label}")
+                if on_progress:
+                    on_progress("tool", label)
                 result = toolbox.execute(name, arguments)
             except Exception as exc:
                 result = f"tool_error: {type(exc).__name__}: {exc}"
                 print(f"  qwen › {result}")
+            if on_progress:
+                outcome = "failed" if result.startswith("tool_error:") else "completed"
+                on_progress("tool_result", f"{name or 'tool'} {outcome}")
             messages.append({
                 "role": "tool",
                 "tool_call_id": call_id,
