@@ -218,7 +218,8 @@ class BrowserEndToEndTests(unittest.TestCase):
         dialog = self.page.locator("#terminalDialog")
         expect(dialog).to_be_visible()
         expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
-        with patch("pilferedparrot.web.subprocess.Popen") as popen:
+        with patch("pilferedparrot.web._terminal_argv", return_value=["terminal"]), \
+             patch("pilferedparrot.web.subprocess.Popen") as popen:
             dialog.locator("#confirmTerminal").click()
             expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
         self.assertTrue(popen.called)
@@ -249,7 +250,7 @@ class BrowserEndToEndTests(unittest.TestCase):
         expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled()
         rendered = self.page.locator("article.message.assistant .message-content")
         expect(rendered).to_contain_text(
-            "This | is table-like prose without | a delimiter row",
+            re.compile(r"This \| is table-like prose\s*without \| a delimiter row"),
         )
         expect(rendered.locator("table")).to_have_count(1)
         expect(rendered.locator("table tbody tr")).to_contain_text("a | b")

@@ -38,11 +38,13 @@ class BrowserNotificationTests(unittest.TestCase):
         self.addCleanup(self.context.close)
         self.page = self.context.new_page()
         self.page.add_init_script("""
+          const notificationCallKey = "__pilferedparrot_notification_calls";
           class MockNotification {
             static permission = "default";
-            static calls = 0;
+            static calls = Number(sessionStorage.getItem(notificationCallKey) || "0");
             static async requestPermission() {
               MockNotification.calls += 1;
+              sessionStorage.setItem(notificationCallKey, String(MockNotification.calls));
               MockNotification.permission = "denied";
               return "denied";
             }
