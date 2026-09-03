@@ -100,6 +100,11 @@ class MarkdownRendererTests(unittest.TestCase):
         self.assertIn("&lt;unsafe&gt; &amp; still visible", output)
         self.assertNotIn("data-run-command", output)
 
+    def test_inline_triple_backtick_text_remains_literal(self):
+        output = self.render("inline ```bash echo malformed``` remains text")
+        self.assertIn("inline ```bash echo malformed``` remains text", output)
+        self.assertNotIn("<code>", output)
+
     def test_command_buttons_keep_raw_fence_indexes_and_single_line_rules(self):
         output = self.render(
             "```python\nprint('not shell')\n```\n"
