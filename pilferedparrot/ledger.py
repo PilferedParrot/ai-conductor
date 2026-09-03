@@ -3,11 +3,15 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import threading
 import time
 from pathlib import Path
 from typing import Any
 
 from .model import ProviderBudget
+
+
+_LEDGER_LOCK = threading.Lock()
 
 
 def append_run(
@@ -42,14 +46,20 @@ def append_run(
         record["message_id"] = message_id
     payload = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path, flags, 0o600)
-    try:
-        os.fchmod(descriptor, 0o600)
-        view = memoryview(payload)
-        while view:
-            written = os.write(descriptor, view)
-            if written <= 0:
-                raise OSError("could not append the run record")
-            view = view[written:]
-    finally:
-        os.close(descriptor)
+    with _LEDGER_LOCK:
+        descriptor = os.open(path, flags, 0o600)
+        try:
+            os.fchmod(descriptor, 0o600)
+            try:
+                import fcntl
+                fcntl.flock(descriptor, fcntl.LOCK_EX)
+            except ImportError:
+                pass
+            view = memoryview(payload)
+            while view:
+                written = os.write(descriptor, view)
+                if written <= 0:
+                    raise OSError("could not append the run record")
+                view = view[written:]
+        finally:
+            os.close(descriptor)

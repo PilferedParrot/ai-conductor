@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
 
@@ -95,13 +96,43 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
 
 
 class QwenToolbox:
-    def __init__(self, cwd: Path, config: dict[str, Any]):
+    def __init__(
+        self,
+        cwd: Path,
+        config: dict[str, Any],
+        additional_dirs: Sequence[Path] = (),
+    ):
         self.cwd = cwd.resolve()
-        if self.cwd == Path.home().resolve() and not config.get("allow_home_workspace", False):
+        home = Path.home().resolve()
+        if self.cwd in home.parents:
+            raise ValueError(
+                "Qwen cannot use a parent of the home directory as its workspace; "
+                "select a narrower project directory instead"
+            )
+        if self.cwd == home and config.get("allow_home_workspace") is not True:
             raise ValueError(
                 "Qwen cannot use the entire home directory unless "
                 "qwen.allow_home_workspace is explicitly enabled"
             )
+        # Extra roots let one task span several projects without widening the
+        # workspace to the whole home directory. The primary workspace stays
+        # first so a path inside it keeps reporting workspace-relative names.
+        roots: list[Path] = [self.cwd]
+        for raw_root in additional_dirs:
+            root = Path(raw_root).resolve()
+            if not root.is_dir():
+                raise ValueError(f"additional directory does not exist: {root}")
+            if root == home or root in home.parents:
+                raise ValueError(
+                    "additional directories cannot contain the home directory "
+                    "or one of its parents"
+                )
+            if not os.access(root, os.W_OK | os.X_OK):
+                raise ValueError(f"additional directory is not writable: {root}")
+            if any(root == kept or kept in root.parents for kept in roots):
+                continue
+            roots.append(root)
+        self.roots = tuple(roots)
         self.config = config
         self.output_limit = int(config.get("tool_output_chars", 24_000))
         self.file_limit = int(config.get("file_limit_bytes", 1_000_000))
@@ -110,6 +141,8 @@ class QwenToolbox:
         self._baselines: dict[Path, str | None] = {}
 
     def execute(self, name: str, arguments: dict[str, Any]) -> str:
+        if self.config.get("read_only") and name not in {"read_file", "diff"}:
+            raise PermissionError(f"tool is unavailable in read-only Chat: {name}")
         handlers = {
             "read_file": self._read_file,
             "write_file": self._write_file,
@@ -127,12 +160,26 @@ class QwenToolbox:
     def _path(self, value: str, *, must_exist: bool = False) -> Path:
         if not isinstance(value, str) or not value.strip():
             raise ValueError("path must be a non-empty string")
+        # A relative path stays workspace-relative; an absolute one is accepted
+        # only when it lands inside a root the operator configured.
         path = (self.cwd / value).resolve()
-        if path != self.cwd and self.cwd not in path.parents:
+        if self._root_for(path) is None:
             raise PermissionError(f"path escapes workspace: {value}")
         if must_exist and not path.exists():
             raise FileNotFoundError(value)
         return path
+
+    def _root_for(self, path: Path) -> Path | None:
+        for root in self.roots:
+            if path == root or root in path.parents:
+                return root
+        return None
+
+    def _display(self, path: Path) -> str:
+        """Name a path the way the operator will recognise it."""
+        if path == self.cwd or self.cwd in path.parents:
+            return str(path.relative_to(self.cwd))
+        return str(path)
 
     def _remember(self, path: Path) -> None:
         if path in self._baselines:
@@ -195,7 +242,7 @@ class QwenToolbox:
     def _file_diff(self, path: Path) -> str:
         before = self._baselines[path]
         after = path.read_text(encoding="utf-8")
-        relative = str(path.relative_to(self.cwd))
+        relative = self._display(path)
         diff = difflib.unified_diff(
             [] if before is None else before.splitlines(keepends=True),
             after.splitlines(keepends=True),
@@ -225,7 +272,7 @@ class QwenToolbox:
             "--dev", "/dev",
             "--proc", "/proc",
         ]
-        if not self.config.get("shell_network", False):
+        if self.config.get("shell_network") is not True:
             argv.append("--unshare-net")
 
         # A read-only root still exposes every operator-readable credential and
@@ -235,13 +282,17 @@ class QwenToolbox:
         home = Path.home().resolve()
         if self.cwd != home:
             argv.extend(["--tmpfs", str(home)])
-            if home in self.cwd.parents:
-                argv.extend(["--dir", str(self.cwd)])
+            # The mask replaces home with an empty tmpfs, so every root below it
+            # needs its mount point recreated before the bind can attach.
+            for root in self.roots:
+                if home in root.parents:
+                    argv.extend(["--dir", str(root)])
 
-        # Put the workspace bind after /tmp and the home mask so workspaces below
-        # either location remain visible and writable.
+        # Put the root binds after /tmp and the home mask so roots below either
+        # location remain visible and writable.
+        for root in self.roots:
+            argv.extend(["--bind", str(root), str(root)])
         argv.extend([
-            "--bind", str(self.cwd), str(self.cwd),
             "--chdir", str(self.cwd),
             "/bin/bash", "-lc", command,
         ])
@@ -269,21 +320,29 @@ class QwenToolbox:
         return f"exit_code: {completed.returncode}\n{output}" if output else f"exit_code: {completed.returncode}"
 
     def _diff(self, path: str | None = None) -> str:
+        root = self.cwd
         pathspec: list[str] = []
         if path:
             target = self._path(path)
-            pathspec = ["--", str(target.relative_to(self.cwd))]
+            root = self._root_for(target) or self.cwd
+            pathspec = ["--", str(target.relative_to(root))]
         probe = subprocess.run(
-            ["git", "-C", str(self.cwd), "rev-parse", "--show-toplevel"],
+            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
             text=True, capture_output=True,
         )
         if probe.returncode:
-            rendered = [self._file_diff(changed) for changed in self._baselines]
+            changed_paths = self._baselines
+            if path:
+                changed_paths = {
+                    changed: baseline for changed, baseline in self._baselines.items()
+                    if changed == target or target in changed.parents
+                }
+            rendered = [self._file_diff(changed) for changed in changed_paths]
             return "\n".join(rendered) if rendered else "workspace is not a Git repository; no file-tool changes yet"
         commands = [
-            ["git", "-C", str(self.cwd), "status", "--short", *pathspec],
-            ["git", "-C", str(self.cwd), "diff", "--no-ext-diff", "--no-color", *pathspec],
-            ["git", "-C", str(self.cwd), "diff", "--cached", "--no-ext-diff", "--no-color", *pathspec],
+            ["git", "-C", str(root), "status", "--short", *pathspec],
+            ["git", "-C", str(root), "diff", "--no-ext-diff", "--no-color", *pathspec],
+            ["git", "-C", str(root), "diff", "--cached", "--no-ext-diff", "--no-color", *pathspec],
         ]
         sections: list[str] = []
         for command in commands:

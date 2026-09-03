@@ -1,19 +1,23 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 import time
 import urllib.error
 import urllib.request
+from queue import Empty, Queue
 from pathlib import Path
 from typing import Any, Callable
 
 from .budgets import qwen_available
+from .config import (
+    compatible_api_headers, open_compatible_url, provider_additional_dirs,
+    validate_qwen_endpoints,
+)
 from .qwen_tools import QwenToolbox, TOOL_DEFINITIONS, parse_tool_arguments
 
 
-AGENT_SYSTEM_PROMPT = """You are Qwen's local coding agent. Work directly on the user's request
+AGENT_SYSTEM_PROMPT = """You are PilferedParrot's coding agent. Work directly on the user's request
 inside the workspace given below. Inspect relevant files before editing, make focused changes, and
 run proportionate checks. Use the file tools for precise reads and edits, shell for discovery and
 tests, and diff to inspect the resulting patch. Never claim that a command passed unless its tool
@@ -23,11 +27,15 @@ Workspace: {cwd}
 """
 
 
-def ensure_qwen(config: dict[str, Any], notify: Callable[[str], None] = print) -> None:
+def ensure_qwen(
+    config: dict[str, Any], notify: Callable[[str], None] = print,
+    cancel_event: threading.Event | None = None,
+) -> None:
+    validate_qwen_endpoints(config)
     if qwen_available(config):
         return
     qwen = config["qwen"]
-    if not qwen.get("auto_start", True):
+    if qwen.get("auto_start") is not True:
         raise RuntimeError(
             "Qwen is not running; start it manually or configure qwen.start_command "
             "and set qwen.auto_start to true"
@@ -36,52 +44,96 @@ def ensure_qwen(config: dict[str, Any], notify: Callable[[str], None] = print) -
     if not isinstance(command, list) or not command:
         raise RuntimeError("qwen.auto_start is enabled but qwen.start_command is empty")
     notify("Qwen is down; starting the stock code profile (usually 30–60 seconds)…")
-    completed = subprocess.run(command, text=True, capture_output=True)
+    timeout = float(qwen.get("start_timeout_seconds", 120))
+    deadline = time.monotonic() + timeout
+    from .dispatch import _capture_process
+    completed = _capture_process(
+        command, "", Path.cwd(), cancel_event=cancel_event, timeout_seconds=timeout,
+    )
     if completed.returncode and "already running" not in completed.stdout:
         detail = completed.stderr.strip() or completed.stdout.strip()
         raise RuntimeError(f"failed to start Qwen: {detail}")
-    deadline = time.monotonic() + float(qwen.get("start_timeout_seconds", 120))
     while time.monotonic() < deadline:
+        if cancel_event is not None and cancel_event.is_set():
+            from .dispatch import RunCancelled
+            raise RunCancelled("request cancelled")
         if qwen_available(config):
             notify("Qwen is ready.")
             return
-        time.sleep(1)
+        time.sleep(min(1, max(0, deadline - time.monotonic())))
     raise TimeoutError("Qwen did not become healthy before the startup timeout")
 
 
 def _chat_completion(
     request_messages: list[dict[str, Any]],
     config: dict[str, Any],
+    provider: str = "qwen",
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
-    qwen = config["qwen"]
+    if provider == "qwen":
+        validate_qwen_endpoints(config)
+    provider_config = config[provider]
+    tools = TOOL_DEFINITIONS
+    if provider_config.get("read_only"):
+        tools = [
+            tool for tool in TOOL_DEFINITIONS
+            if tool.get("function", {}).get("name") in {"read_file", "diff"}
+        ]
     payload = {
-        "model": qwen["model"],
+        "model": provider_config["model"],
         "messages": request_messages,
-        "tools": TOOL_DEFINITIONS,
+        "tools": tools,
         "tool_choice": "auto",
-        "temperature": 1.0,
-        "top_p": 0.95,
-        "max_tokens": int(qwen.get("agent_max_tokens", 4096)),
+        "max_tokens": int(provider_config.get("agent_max_tokens", 4096)),
         "stream": False,
     }
     request = urllib.request.Request(
-        qwen["base_url"].rstrip("/") + "/chat/completions",
+        provider_config["base_url"].rstrip("/") + "/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
+        headers=compatible_api_headers(config, provider),
         method="POST",
     )
-    try:
-        timeout = float(qwen.get("agent_request_timeout_seconds", 600))
-        with urllib.request.urlopen(request, timeout=timeout) as response:
-            result = json.load(response)
-        message = dict(result["choices"][0]["message"])
-        usage = result.get("usage")
-        if isinstance(usage, dict):
-            message["_pilferedparrot_usage"] = usage
-        return message
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"Qwen request failed ({exc.code}): {detail}") from exc
+    def request_once() -> dict[str, Any]:
+        timeout = float(provider_config.get("agent_request_timeout_seconds", 600))
+        try:
+            with open_compatible_url(config, provider, request, timeout=timeout) as response:
+                result = json.load(response)
+            message = dict(result["choices"][0]["message"])
+            usage = result.get("usage")
+            if isinstance(usage, dict):
+                message["_pilferedparrot_usage"] = usage
+            return message
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read(16_384).decode("utf-8", errors="replace")
+            finally:
+                exc.close()
+            raise RuntimeError(f"{provider} request failed ({exc.code}): {detail}") from exc
+
+    if cancel_event is None:
+        return request_once()
+    completed: Queue[tuple[bool, Any]] = Queue(maxsize=1)
+
+    def request_in_background() -> None:
+        try:
+            completed.put((True, request_once()))
+        except BaseException as error:
+            completed.put((False, error))
+
+    threading.Thread(
+        target=request_in_background, name=f"pilferedparrot-{provider}-http", daemon=True,
+    ).start()
+    while True:
+        if cancel_event.is_set():
+            from .dispatch import RunCancelled
+            raise RunCancelled("request cancelled")
+        try:
+            succeeded, value = completed.get(timeout=0.1)
+        except Empty:
+            continue
+        if succeeded:
+            return value
+        raise value
 
 
 def _tool_label(name: str, arguments: dict[str, Any]) -> str:
@@ -103,16 +155,49 @@ def run_qwen_agent(
     on_progress: Callable[[str, str], None] | None = None,
     token_usage: dict[str, int] | None = None,
 ) -> str:
-    qwen = config["qwen"]
-    toolbox = QwenToolbox(cwd, qwen)
+    return run_compatible_agent(
+        "qwen", prompt, messages, config, cwd, cancel_event, on_progress, token_usage,
+    )
+
+
+def run_compatible_agent(
+    provider: str,
+    prompt: str,
+    messages: list[dict[str, Any]],
+    config: dict[str, Any],
+    cwd: Path,
+    cancel_event: threading.Event | None = None,
+    on_progress: Callable[[str, str], None] | None = None,
+    token_usage: dict[str, int] | None = None,
+) -> str:
+    """Run any OpenAI-compatible model through the same contained tool loop."""
+    provider_config = config[provider]
+    additional_dirs = provider_additional_dirs(config, provider)
+    toolbox = QwenToolbox(cwd, provider_config, additional_dirs)
     messages.append({"role": "user", "content": prompt})
-    system = {"role": "system", "content": AGENT_SYSTEM_PROMPT.format(cwd=cwd)}
-    max_turns = int(qwen.get("max_tool_turns", 24))
+    # Appended rather than interpolated: the context estimator formats this
+    # template with an empty workspace, so the template keeps one field.
+    system_prompt = AGENT_SYSTEM_PROMPT.format(cwd=cwd)
+    if provider_config.get("read_only"):
+        system_prompt += (
+            "\nThis is a read-only Chat instance. Inspect and explain, but do not modify "
+            "files or run commands.\n"
+        )
+    if additional_dirs:
+        listed = "\n".join(f"- {root}" for root in additional_dirs)
+        system_prompt += (
+            "\nThese additional roots are also readable and writable. Reach them with "
+            f"absolute paths; everything else outside the workspace is denied.\n{listed}\n"
+        )
+    system = {"role": "system", "content": system_prompt}
+    max_turns = int(provider_config.get("max_tool_turns", 24))
     for _turn in range(max_turns):
         if cancel_event is not None and cancel_event.is_set():
             from .dispatch import RunCancelled
             raise RunCancelled("request cancelled")
-        message = _chat_completion([system, *messages], config)
+        message = _chat_completion(
+            [system, *messages], config, provider, cancel_event=cancel_event,
+        )
         raw_usage = message.pop("_pilferedparrot_usage", None)
         if isinstance(raw_usage, dict):
             normalized: dict[str, int] = {}
@@ -166,13 +251,13 @@ def run_qwen_agent(
             try:
                 arguments = parse_tool_arguments(function.get("arguments", "{}"))
                 label = _tool_label(name, arguments)
-                print(f"  qwen › {label}")
+                print(f"  {provider} › {label}")
                 if on_progress:
                     on_progress("tool", label)
                 result = toolbox.execute(name, arguments)
             except Exception as exc:
                 result = f"tool_error: {type(exc).__name__}: {exc}"
-                print(f"  qwen › {result}")
+                print(f"  {provider} › {result}")
             if on_progress:
                 outcome = "failed" if result.startswith("tool_error:") else "completed"
                 on_progress("tool_result", f"{name or 'tool'} {outcome}")
@@ -182,4 +267,4 @@ def run_qwen_agent(
                 "name": name,
                 "content": result,
             })
-    raise RuntimeError(f"Qwen exceeded its {max_turns}-turn tool-loop limit")
+    raise RuntimeError(f"{provider} exceeded its {max_turns}-turn tool-loop limit")

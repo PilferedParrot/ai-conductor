@@ -56,7 +56,9 @@ HELP = """Commands:
   /new             start a fresh conversation with the current provider
   /qwen             switch to a fresh local Qwen conversation
   /codex            switch to a fresh Codex conversation
-  /budget           refresh Qwen status and Codex included usage
+  /claude           switch to a fresh Claude Code conversation
+  /gemini           switch to a fresh Google Gemini conversation
+  /budget           refresh provider status and included usage
   /status           show the working directory and provider
   /help             show this help
   /quit             exit
@@ -68,7 +70,7 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
     if provider not in PROVIDERS:
         provider = "codex"
     conversation = Conversation(provider=provider)
-    print(f"PilferedParrot {__version__} — direct local Qwen or OpenAI Codex sessions.")
+    print(f"PilferedParrot {__version__} — direct Qwen, Codex, Claude, or Gemini sessions.")
     print("Type /help for commands. Ctrl-D exits.")
     while True:
         try:
@@ -85,7 +87,7 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
             if command == "/new":
                 conversation.reset(provider)
                 print(f"new {provider} conversation")
-            elif command in ("/qwen", "/codex"):
+            elif command in ("/qwen", "/codex", "/claude", "/gemini"):
                 provider = command[1:]
                 conversation.reset(provider)
                 print(f"new {provider} conversation")
@@ -105,7 +107,9 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Direct interface for local Qwen and OpenAI Codex")
+    parser = argparse.ArgumentParser(
+        description="Direct interface for local Qwen, OpenAI Codex, Claude Code, and Gemini",
+    )
     parser.add_argument("--version", action="version", version=f"PilferedParrot {__version__}")
     parser.add_argument("--config", help="path to a JSON configuration file")
     parser.add_argument("--cwd", default=os.getcwd(), help="working directory for the agent")
