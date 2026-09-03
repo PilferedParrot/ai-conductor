@@ -14,10 +14,8 @@ import subprocess
 import tempfile
 import threading
 import time
-import uuid
 import webbrowser
 from copy import deepcopy
-from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -28,13 +26,14 @@ from urllib.request import Request, urlopen
 from . import __version__
 from .budgets import collect_budgets
 from .config import (
-    codex_additional_write_dirs, context_window_percent, effective_model, expanded_path,
-    load_config, model_catalog, model_context_window, model_max_context_window,
+    context_window_percent, effective_model, expanded_path, load_config, model_catalog,
+    model_context_window, model_max_context_window,
 )
 from .dispatch import RunCancelled, RunResult, capture_dispatch
 from .ledger import append_run
 from .model import Conversation, PROVIDERS, ProviderBudget
 from .qwen import ensure_qwen
+from .web_provider import ActiveRun, ProviderRunOrchestrator
 from .web_persistence import PersistentChatStore, chat_store_path, legacy_chat_store_path
 
 
@@ -365,12 +364,6 @@ def _terminate_stale_pilferedparrot(url: str, port: int) -> None:
     raise RuntimeError(f"stale PilferedParrot did not release port {port}")
 
 
-@dataclass
-class ActiveRun:
-    cancel_event: threading.Event = field(default_factory=threading.Event)
-    thread: threading.Thread | None = None
-
-
 class ChatStore(PersistentChatStore):
     """Compatibility facade retaining the historical web.ChatStore API."""
 
@@ -413,9 +406,6 @@ class PilferedParrotApp:
         self.chat_window_lock = threading.RLock()
         self.chat_window_process: subprocess.Popen[bytes] | None = None
         self.chat_window_profile: Path | None = None
-        self.runs_lock = threading.RLock()
-        self.runs: dict[str, ActiveRun] = {}
-        self.chat_run: ActiveRun | None = None
         self.chat_model = str(
             config["web"].get("chat_model") or "gpt-5.6-terra"
         ).strip()
@@ -428,6 +418,41 @@ class PilferedParrotApp:
             "none", "low", "medium", "high", "xhigh", "max",
         }:
             raise ValueError("web.chat_reasoning_effort is invalid")
+        self.provider_runs = ProviderRunOrchestrator(
+            config,
+            store=self.store,
+            default_cwd=self.default_cwd,
+            default_provider=self.default_provider,
+            chat_model=self.chat_model,
+            chat_model_options=CHAT_MODEL_OPTIONS,
+            chat_reasoning_effort=self.chat_reasoning_effort,
+            chat_context_warning_chars=self.chat_context_warning_chars,
+            dispatch=lambda *args, **kwargs: capture_dispatch(*args, **kwargs),
+            ensure_provider=lambda provider_config: ensure_qwen(provider_config),
+            budget_collector=lambda provider_config: collect_budgets(provider_config),
+            ledger_writer=lambda *args, **kwargs: append_run(*args, **kwargs),
+            thread_factory=lambda *args, **kwargs: threading.Thread(*args, **kwargs),
+            effective_model_for=lambda provider_config, provider: effective_model(
+                provider_config, provider,
+            ),
+            context_percent_for=lambda provider_config, provider: context_window_percent(
+                provider_config, provider,
+            ),
+            context_max_for=lambda provider_config, provider, model: model_max_context_window(
+                provider_config, provider, model,
+            ),
+            context_limit_for=lambda provider_config, provider, model, percent: (
+                model_context_window(provider_config, provider, model, percent)
+            ),
+            context_usage=_context_usage,
+            context_percent=_context_percent,
+            project_directory=_project_directory,
+            migrate_project_path=lambda value: _migrate_renamed_project_path(
+                value, self.renamed_repository_root,
+            ),
+            validate_workspace=_validate_provider_workspace,
+            outside_write_target=_outside_write_target,
+        )
         self.store.chat_model = self.chat_model
         with self.store.lock:
             self.store._normalize_chat_thread(self.store.data["chat"])
@@ -480,44 +505,26 @@ class PilferedParrotApp:
                     technical_chat.pop("context_max_tokens", None)
             self.store.save()
 
+    @property
+    def runs_lock(self) -> threading.RLock:
+        """Compatibility view of the provider coordinator's run lock."""
+        return self.provider_runs.runs_lock
+
+    @property
+    def runs(self) -> dict[str, ActiveRun]:
+        """Compatibility view of active work-session runs."""
+        return self.provider_runs.runs
+
+    @property
+    def chat_run(self) -> ActiveRun | None:
+        """Compatibility view of the active Chat run."""
+        return self.provider_runs.chat_run
+
     def recover_interrupted(self) -> int:
-        recovered = 0
-        with self.store.lock:
-            for chat in self.store.data["chats"]:
-                chat_recovered = False
-                for message in chat.get("messages", []):
-                    if not message.get("pending"):
-                        continue
-                    message.update({
-                        "content": "PilferedParrot restarted before this response finished. You can retry.",
-                        "error": True,
-                        "interrupted": True,
-                    })
-                    message.pop("pending", None)
-                    message.pop("cancel_requested", None)
-                    recovered += 1
-                    chat_recovered = True
-                if chat_recovered:
-                    chat["updated_at"] = int(time.time())
-            chat_thread = self.store.data["chat"]
-            for message in chat_thread.get("messages", []):
-                if not message.get("pending"):
-                    continue
-                message.update({
-                    "content": "PilferedParrot restarted before Chat finished. You can retry.",
-                    "error": True,
-                    "interrupted": True,
-                })
-                message.pop("pending", None)
-                message.pop("cancel_requested", None)
-                recovered += 1
-                chat_thread["updated_at"] = int(time.time())
-            if recovered:
-                self.store.save()
-        return recovered
+        return self.provider_runs.recover_interrupted()
 
     def budgets(self) -> dict[str, ProviderBudget]:
-        return collect_budgets(self.config)
+        return self.provider_runs.budgets()
 
     def state(self) -> dict[str, Any]:
         catalog = model_catalog(self.config)
@@ -658,479 +665,36 @@ class PilferedParrotApp:
             self.store.delete(chat_id)
 
     def send_message(self, chat_id: str, payload: dict[str, Any]) -> dict[str, Any]:
-        prompt = str(payload.get("content") or "").strip()
-        if not prompt:
-            raise ValueError("message cannot be empty")
-        active = ActiveRun()
-        with self.runs_lock:
-            if chat_id in self.runs:
-                raise ValueError("this work session is already running")
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                if any(message.get("pending") for message in chat["messages"]):
-                    raise ValueError("this work session is already running")
-                provider = str(payload.get("provider") or chat.get("requested_provider")
-                               or self.default_provider)
-                if provider not in PROVIDERS:
-                    raise ValueError("provider must be qwen or codex")
-                model_value = payload.get("model") if "model" in payload \
-                    else chat.get("requested_model")
-                requested_model = self._normalize_model(model_value)
-                chat["requested_provider"] = provider
-                chat["requested_model"] = requested_model
-                if not chat["messages"]:
-                    requested_cwd = _project_directory(_migrate_renamed_project_path(
-                        payload.get("cwd") or chat["cwd"], self.renamed_repository_root,
-                    ))
-                    _validate_provider_workspace(provider, requested_cwd, self.config)
-                    writable_roots = (requested_cwd,)
-                    if provider == "codex":
-                        writable_roots += codex_additional_write_dirs(self.config)
-                    outside_target = _outside_write_target(prompt, writable_roots)
-                    if outside_target is not None:
-                        raise ValueError(
-                            f"project mismatch: this task appears to modify {outside_target}, "
-                            f"but the writable project is {requested_cwd}; choose that Project "
-                            "folder or add it to codex.additional_write_dirs"
-                        )
-                    chat["cwd"] = str(requested_cwd)
-                now = int(time.time())
-                if not chat["messages"]:
-                    chat["title"] = " ".join(prompt.split())[:54]
-                chat["messages"].append({
-                    "id": uuid.uuid4().hex,
-                    "role": "user",
-                    "content": prompt,
-                    "created_at": now,
-                })
-                pending = {
-                    "id": uuid.uuid4().hex,
-                    "role": "assistant",
-                    "content": "",
-                    "created_at": now,
-                    "pending": True,
-                    "run_id": uuid.uuid4().hex,
-                    "requested_provider": provider,
-                    "requested_model": requested_model,
-                    "provider": provider,
-                }
-                chat["messages"].append(pending)
-                chat["updated_at"] = now
-                self.store.save()
-                public = self.store.public(chat)
-            self.runs[chat_id] = active
-        thread = threading.Thread(
-            target=self._run_message,
-            args=(chat_id, pending["id"], prompt, active),
-            name=f"pilferedparrot-{chat_id[:8]}",
-            daemon=True,
-        )
-        active.thread = thread
-        try:
-            thread.start()
-        except Exception as error:
-            with self.runs_lock:
-                self.runs.pop(chat_id, None)
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                failed = self._message(chat, pending["id"])
-                failed.update({"content": f"PilferedParrot error: {error}", "error": True})
-                failed.pop("pending", None)
-                self.store.save()
-            raise
-        return public
+        return self.provider_runs.send_message(chat_id, payload)
 
     def _run_message(
         self, chat_id: str, pending_id: str, prompt: str, active: ActiveRun,
     ) -> None:
-        provider: str | None = None
-        budgets: dict[str, ProviderBudget] = {}
-        try:
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                provider = chat["requested_provider"]
-                requested_model = chat.get("requested_model")
-                current_provider = chat.get("provider")
-                current_model = chat.get("model")
-                if current_provider and current_model is None and current_provider in PROVIDERS:
-                    current_model = effective_model(self.config, current_provider)
-                session_id = chat.get("provider_session_id")
-                qwen_messages = list(chat.get("qwen_messages") or [])
-                cwd = Path(chat["cwd"])
-
-            if provider == "qwen":
-                ensure_qwen(self.config)
-            selected_model = requested_model or effective_model(self.config, provider)
-            same_session = provider == current_provider and selected_model == current_model
-            percent = _context_percent(chat.get(
-                "context_window_percent", context_window_percent(self.config, provider),
-            ))
-            context_max = model_max_context_window(self.config, provider, selected_model)
-            context_limit = model_context_window(
-                self.config, provider, selected_model, percent,
-            )
-            run_config = deepcopy(self.config)
-            if selected_model:
-                run_config[provider]["model"] = selected_model
-            if provider == "codex" and context_limit is not None:
-                run_config["codex"]["context_window_limit_tokens"] = context_limit
-            conversation = Conversation(
-                provider=provider,
-                provider_session_id=session_id if same_session else None,
-                qwen_messages=qwen_messages if provider == "qwen" and same_session else [],
-            )
-
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                pending = self._message(chat, pending_id)
-                pending["model"] = selected_model
-                if not same_session:
-                    chat.pop("last_turn_usage", None)
-                if context_limit is not None:
-                    chat["context_limit_tokens"] = context_limit
-                    chat["context_max_tokens"] = context_max
-                    chat["context_window_percent"] = percent
-                else:
-                    chat.pop("context_limit_tokens", None)
-                    chat.pop("context_max_tokens", None)
-                self.store.save()
-
-            def report_progress(kind: str, text: str) -> None:
-                rendered = str(text).strip()
-                if not rendered:
-                    return
-                rendered = rendered[:4_000]
-                with self.store.lock:
-                    pending = self._message(self.store.get(chat_id), pending_id)
-                    activity = pending.setdefault("activity", [])
-                    activity.append({
-                        "kind": kind,
-                        "content": rendered,
-                        "created_at": int(time.time()),
-                    })
-                    if len(activity) > 100:
-                        del activity[:-100]
-                    self.store.save()
-
-            setattr(active.cancel_event, "_pilferedparrot_progress", report_progress)
-            result = capture_dispatch(
-                provider, prompt, cwd, conversation, run_config, active.cancel_event,
-            )
-            if result.exit_code == 0 and result.session_id:
-                conversation.provider_session_id = result.session_id
-            content = result.text or result.error or f"{provider.title()} exited without a response."
-            if result.exit_code and result.error and result.text:
-                content += f"\n\n{result.error}"
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                pending = self._message(chat, pending_id)
-                pending.update({
-                    "content": content,
-                    "provider": provider,
-                    "model": selected_model,
-                    "exit_code": result.exit_code,
-                    "error": bool(result.exit_code),
-                })
-                if result.exit_code == 0:
-                    chat["provider"] = provider
-                    chat["model"] = selected_model
-                    chat["provider_session_id"] = conversation.provider_session_id
-                    chat["qwen_messages"] = conversation.qwen_messages
-                    if result.input_tokens is not None and result.output_tokens is not None:
-                        chat["last_turn_usage"] = {
-                            "input_tokens": result.input_tokens,
-                            "output_tokens": result.output_tokens,
-                        }
-            try:
-                append_run(
-                    self.config["ledger"], provider=provider, prompt=prompt, cwd=cwd,
-                    session_id=conversation.provider_session_id, budgets=budgets,
-                    exit_code=result.exit_code, run_id=pending["run_id"],
-                    chat_id=chat_id, message_id=pending_id,
-                )
-            except OSError as error:
-                print(f"[web] could not append run ledger: {error}")
-        except RunCancelled:
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                pending = self._message(chat, pending_id)
-                pending.update({"content": "Cancelled.", "cancelled": True, "exit_code": 130})
-        except Exception as exc:
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                pending = self._message(chat, pending_id)
-                pending.update({
-                    "content": f"PilferedParrot error: {exc}",
-                    "provider": provider,
-                    "error": True,
-                    "exit_code": 1,
-                })
-        finally:
-            with self.runs_lock:
-                with self.store.lock:
-                    chat = self.store.get(chat_id)
-                    pending = self._message(chat, pending_id)
-                    pending.pop("pending", None)
-                    pending.pop("cancel_requested", None)
-                    chat["updated_at"] = int(time.time())
-                    self.store.save()
-                    if self.runs.get(chat_id) is active:
-                        self.runs.pop(chat_id, None)
+        self.provider_runs._run_message(chat_id, pending_id, prompt, active)
 
     @staticmethod
     def _message(chat: dict[str, Any], message_id: str) -> dict[str, Any]:
-        for message in chat["messages"]:
-            if message.get("id") == message_id:
-                return message
-        raise KeyError(message_id)
+        return ProviderRunOrchestrator._message(chat, message_id)
 
     def cancel_message(self, chat_id: str) -> dict[str, Any]:
-        with self.runs_lock:
-            active = self.runs.get(chat_id)
-            with self.store.lock:
-                chat = self.store.get(chat_id)
-                pending = next((item for item in chat["messages"] if item.get("pending")), None)
-                if pending is None:
-                    raise ValueError("this work session is not running")
-                pending["cancel_requested"] = True
-                self.store.save()
-                public = self.store.public(chat)
-            if active is not None:
-                active.cancel_event.set()
-            else:
-                with self.store.lock:
-                    chat = self.store.get(chat_id)
-                    pending = next(item for item in chat["messages"] if item.get("pending"))
-                    pending.update({"content": "Cancelled.", "cancelled": True, "exit_code": 130})
-                    pending.pop("pending", None)
-                    pending.pop("cancel_requested", None)
-                    chat["updated_at"] = int(time.time())
-                    self.store.save()
-                    public = self.store.public(chat)
-        return public
+        return self.provider_runs.cancel_message(chat_id)
 
     def send_chat_message(self, payload: dict[str, Any]) -> dict[str, Any]:
-        content = str(payload.get("content") or "").strip()
-        if not content:
-            raise ValueError("message cannot be empty")
-        if len(content) > 40_000:
-            raise ValueError("message is too long")
-        active = ActiveRun()
-        with self.runs_lock:
-            if self.chat_run is not None:
-                raise ValueError("Chat is already responding")
-            with self.store.lock:
-                chat_thread = self.store.data["chat"]
-                if any(message.get("pending") for message in chat_thread["messages"]):
-                    raise ValueError("Chat is already responding")
-                requested_model = self._normalize_chat_model(
-                    payload.get("model") if "model" in payload else chat_thread.get("model")
-                )
-                if requested_model != chat_thread.get("model"):
-                    if chat_thread.get("messages"):
-                        raise ValueError("start a new chat before changing the chat model")
-                    chat_thread["model"] = requested_model
-                    # A Codex resume token is model-specific. Never carry it
-                    # across a model picker change.
-                    chat_thread.pop("provider_session_id", None)
-                percent = _context_percent(chat_thread.get(
-                    "context_window_percent", context_window_percent(self.config, "codex"),
-                ))
-                context_max = model_max_context_window(
-                    self.config, "codex", requested_model,
-                )
-                context_limit = model_context_window(
-                    self.config, "codex", requested_model, percent,
-                )
-                if context_limit is not None:
-                    chat_thread["context_max_tokens"] = context_max
-                    chat_thread["context_limit_tokens"] = context_limit
-                    chat_thread["context_window_percent"] = percent
-                now = int(time.time())
-                if not chat_thread["messages"]:
-                    chat_thread["title"] = " ".join(content.split())[:54]
-                chat_thread["messages"].append({
-                    "id": uuid.uuid4().hex,
-                    "role": "user",
-                    "content": content,
-                    "created_at": now,
-                })
-                pending = {
-                    "id": uuid.uuid4().hex,
-                    "role": "assistant",
-                    "content": "",
-                    "created_at": now,
-                    "pending": True,
-                    "model": requested_model,
-                }
-                chat_thread["messages"].append(pending)
-                chat_thread["updated_at"] = now
-                self.store.save()
-                public = self.store.chat_public()
-            self.chat_run = active
-        thread = threading.Thread(
-            target=self._run_chat,
-            args=(pending["id"], content, requested_model, active),
-            name="pilferedparrot-chat",
-            daemon=True,
-        )
-        active.thread = thread
-        try:
-            thread.start()
-        except Exception as error:
-            with self.runs_lock:
-                with self.store.lock:
-                    chat_thread = self.store.data["chat"]
-                    failed = next(
-                        message for message in chat_thread["messages"]
-                        if message.get("id") == pending["id"]
-                    )
-                    failed.update({"content": f"Chat error: {error}", "error": True})
-                    failed.pop("pending", None)
-                    chat_thread["updated_at"] = int(time.time())
-                    self.store.save()
-                if self.chat_run is active:
-                    self.chat_run = None
-            raise
-        return public
+        return self.provider_runs.send_chat_message(payload)
 
-    @staticmethod
-    def _normalize_chat_model(value: Any) -> str:
-        if not isinstance(value, str) or value.strip() not in CHAT_MODEL_OPTIONS:
-            raise ValueError("chat model must be gpt-5.6-terra or gpt-5.6-luna")
-        return value.strip()
+    def _normalize_chat_model(self, value: Any) -> str:
+        return self.provider_runs.normalize_chat_model(value)
 
     def _run_chat(
         self, pending_id: str, content: str, model: str, active: ActiveRun,
     ) -> None:
-        reply = ""
-        try:
-            with self.store.lock:
-                chat_thread = self.store.data["chat"]
-                session_id = chat_thread.get("provider_session_id")
-                percent = _context_percent(chat_thread.get(
-                    "context_window_percent", context_window_percent(self.config, "codex"),
-                ))
-            context_limit = model_context_window(self.config, "codex", model, percent)
-            run_config = deepcopy(self.config)
-            run_config["codex"]["model"] = model
-            run_config["codex"]["reasoning_effort"] = self.chat_reasoning_effort
-            run_config["codex"]["sandbox"] = "read-only"
-            run_config["codex"]["additional_write_dirs"] = []
-            if context_limit is not None:
-                run_config["codex"]["context_window_limit_tokens"] = context_limit
-            conversation = Conversation(provider="codex", provider_session_id=session_id)
-            result = capture_dispatch(
-                "codex", content, self.default_cwd, conversation,
-                run_config, active.cancel_event,
-            )
-            if result.exit_code:
-                raise RuntimeError(result.error or result.text or "Chat model exited without a response")
-            reply = result.text.strip()
-            with self.store.lock:
-                chat_thread = self.store.data["chat"]
-                chat_thread["provider_session_id"] = result.session_id \
-                    or conversation.provider_session_id
-                if result.input_tokens is not None and result.output_tokens is not None:
-                    chat_thread["last_turn_usage"] = {
-                        "input_tokens": result.input_tokens,
-                        "output_tokens": result.output_tokens,
-                    }
-        except RunCancelled:
-            reply = "Stopped."
-        except Exception as error:
-            reply = f"Chat error: {error}"
-        finally:
-            with self.runs_lock:
-                with self.store.lock:
-                    chat_thread = self.store.data["chat"]
-                    pending = next(
-                        message for message in chat_thread["messages"]
-                        if message.get("id") == pending_id
-                    )
-                    chat_thread["context_chars"] = int(chat_thread.get("context_chars", 0)) \
-                        + len(content) + len(reply)
-                    percent = _context_percent(chat_thread.get(
-                        "context_window_percent", context_window_percent(self.config, "codex"),
-                    ))
-                    context_max = model_max_context_window(self.config, "codex", model)
-                    context_limit = model_context_window(
-                        self.config, "codex", model, percent,
-                    )
-                    if context_limit is not None:
-                        chat_thread["context_limit_tokens"] = context_limit
-                        chat_thread["context_max_tokens"] = context_max
-                        chat_thread["context_window_percent"] = percent
-                    else:
-                        chat_thread.pop("context_limit_tokens", None)
-                        chat_thread.pop("context_max_tokens", None)
-                    usage = _context_usage(
-                        chat_thread["context_chars"], self.chat_context_warning_chars,
-                        limit_tokens=chat_thread.get("context_limit_tokens"),
-                        max_tokens=chat_thread.get("context_max_tokens"),
-                        allowance_percent=chat_thread.get("context_window_percent"),
-                    )
-                    crossed_warning = (
-                        usage["percent"] >= 80
-                        and not chat_thread.get("warning_announced")
-                    )
-                    if crossed_warning:
-                        reply += (
-                            "\n\nThis Chat thread is carrying a lot of context now. "
-                            "Start a new Chat conversation soon to keep responses quick and economical."
-                        )
-                        chat_thread["warning_announced"] = True
-                    chat_thread["context_warning"] = usage["percent"] >= 80
-                    pending["content"] = reply
-                    if reply.startswith("Chat error:"):
-                        pending["error"] = True
-                    pending.pop("pending", None)
-                    pending.pop("cancel_requested", None)
-                    chat_thread["updated_at"] = int(time.time())
-                    self.store.save()
-                if self.chat_run is active:
-                    self.chat_run = None
+        self.provider_runs._run_chat(pending_id, content, model, active)
 
     def cancel_chat(self) -> dict[str, Any]:
-        with self.runs_lock:
-            active = self.chat_run
-            with self.store.lock:
-                chat_thread = self.store.data["chat"]
-                pending = next(
-                    (message for message in chat_thread["messages"] if message.get("pending")), None,
-                )
-                if pending is None:
-                    raise ValueError("Chat is not responding")
-                pending["cancel_requested"] = True
-                self.store.save()
-            if active is not None:
-                active.cancel_event.set()
-            return self.store.chat_public()
+        return self.provider_runs.cancel_chat()
 
     def reset_chat(self, payload: dict[str, Any] | None = None) -> dict[str, Any]:
-        payload = payload or {}
-        model = self._normalize_chat_model(payload["model"]) \
-            if "model" in payload else self.chat_model
-        with self.runs_lock:
-            if self.chat_run is not None:
-                raise ValueError("stop Chat before starting a new conversation")
-            chat_thread = self.store.reset_chat(model)
-            percent = context_window_percent(self.config, "codex")
-            context_max = model_max_context_window(self.config, "codex", model)
-            context_limit = model_context_window(
-                self.config, "codex", model, percent,
-            )
-            if context_limit is not None:
-                with self.store.lock:
-                    self.store.data["chat"]["context_limit_tokens"] = context_limit
-                    self.store.data["chat"]["context_max_tokens"] = context_max
-                    self.store.data["chat"]["context_window_percent"] = percent
-                    self.store.save()
-                chat_thread = self.store.chat_public()
-            return {
-                "chat": chat_thread,
-                "chat_history": self.store.chat_history_public(),
-            }
+        return self.provider_runs.reset_chat(payload)
 
     def launch_terminal_command(self, chat_id: str, payload: dict[str, Any]) -> None:
         message_id = payload.get("message_id")
