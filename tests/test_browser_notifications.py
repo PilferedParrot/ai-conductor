@@ -48,7 +48,11 @@ class BrowserNotificationTests(unittest.TestCase):
             }
             constructor() {}
           }
-          globalThis.Notification = MockNotification;
+          Object.defineProperty(globalThis, "Notification", {
+            configurable: true,
+            writable: true,
+            value: MockNotification,
+          });
         """)
         self.page.goto(self.fixture.browser_url, wait_until="domcontentloaded")
         expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)

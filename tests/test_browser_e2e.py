@@ -43,7 +43,7 @@ class BrowserEndToEndTests(unittest.TestCase):
         self.context.on("request", self._record_external_request)
         self.page = self.context.new_page()
         self.page_errors = []
-        self.page.on("pageerror", self.page_errors.append)
+        self.page.on("pageerror", lambda error: self.page_errors.append(error))
         self.page.goto(self.fixture.browser_url, wait_until="domcontentloaded")
         expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
 
@@ -199,7 +199,7 @@ class BrowserEndToEndTests(unittest.TestCase):
 
         chat_capability = self.fixture.app.issue_capability("chat", provider="codex")
         chat_page = self.context.new_page()
-        chat_page.on("pageerror", self.page_errors.append)
+        chat_page.on("pageerror", lambda error: self.page_errors.append(error))
         chat_page.goto(
             f"{self.fixture.base_url}/chat#capability={chat_capability}&provider=codex",
             wait_until="domcontentloaded",
