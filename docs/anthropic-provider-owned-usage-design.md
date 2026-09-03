@@ -1,20 +1,22 @@
 # Anthropic provider-owned usage and credential design
 
-Research date: 2026-09-03. This is a design record only; it changes no
-provider, authentication, storage, or runtime behavior.
+Research date: 2026-09-03. This began as a design-only record. The research
+conclusions below are preserved; implementation-status notes now identify the
+parts shipped by the 0.5.0 migration.
 
 ## Conclusion
 
 **Partially available.** Anthropic provides supported, provider-owned,
 organization-level interfaces for Claude Code analytics and API/Enterprise
 usage and cost reporting. They are not a supported replacement for
-PilferedParrot's live, individual Claude.ai plan-allowance display or its
-direct refresh of a Claude Code OAuth credential.
+PilferedParrot's former live, individual Claude.ai plan-allowance display or
+the former direct refresh of a Claude Code OAuth credential.
 
 In particular, the supported reporting interfaces are historical aggregates
 (daily for Claude Code analytics) and require an organization-level
 administrative or Enterprise Analytics credential. They do not return the
-current five-hour/weekly allowance or reset time used by the present sidebar.
+current five-hour/weekly allowance or reset time used by the pre-migration
+sidebar.
 The Claude Code and Agent SDK documentation also says that, unless previously
 approved, third-party developers may not offer Claude.ai login or rate limits.
 
@@ -33,10 +35,13 @@ Anthropic announced the Claude Code Analytics API on **2025-09-10** in its
 The documentation pages above were checked on 2026-09-03; where a page did not
 show its own publication or update date, this record does not infer one.
 
-## Current PilferedParrot surface
+## Historical pre-migration PilferedParrot surface
 
-`pilferedparrot/budgets.py` currently couples the Claude allowance display to
-Claude Code's local credential implementation:
+This section describes the 0.4.x behavior that motivated the migration. It is
+historical, not a description of the 0.5.0 runtime.
+
+`pilferedparrot/budgets.py` coupled the Claude allowance display to Claude
+Code's local credential implementation:
 
 - `_claude_credentials_path`, `_load_claude_credentials`, and
   `_claude_access_token` read `CLAUDE_CODE_OAUTH_TOKEN` or
@@ -51,21 +56,22 @@ Claude Code's local credential implementation:
 - `read_claude_status` first runs `claude auth status --json` and then triggers
   that direct budget flow; `collect_budgets` calls it for Claude.
 
-The direct path is separate from normal execution: `dispatch.py` invokes the
-Claude CLI in print/stream-JSON mode and receives per-turn token telemetry.
-`web.py` caches budget snapshots and `/api/budgets` returns normalized
-`ProviderBudget` values to dashboard-capability holders. `app.js` renders the
-five-hour and weekly bars. `ledger.py` records budget snapshots with run
-metadata in an owner-only local ledger. The app's sign-in/out UI invokes the
-Claude CLI; it does not intentionally put credential values into browser state.
+The direct path was separate from normal execution: `dispatch.py` invoked the
+Claude CLI in print/stream-JSON mode and received per-turn token telemetry.
+`web.py` cached budget snapshots and `/api/budgets` returned normalized
+`ProviderBudget` values to dashboard-capability holders. `app.js` rendered the
+five-hour and weekly bars. `ledger.py` recorded budget snapshots with run
+metadata in an owner-only local ledger. The app's sign-in/out UI invoked the
+Claude CLI; it did not intentionally put credential values into browser state.
 
 `ProviderAdapter`/`ClaudeAdapter` in `adapters.py`, plus `ProviderBudget` and
-`BudgetWindow` in `model.py`, are the useful existing abstraction boundary.
-They should distinguish: CLI-owned authentication, per-turn execution telemetry,
-optional provider-owned organization reporting, and unsupported plan allowance.
-No credential reader, refresher, or private endpoint belongs in that boundary.
+`BudgetWindow` in `model.py`, were the useful existing abstraction boundary.
+The 0.5.0 implementation now distinguishes CLI-owned authentication, per-turn
+execution telemetry, optional provider-owned organization reporting, and
+unsupported plan allowance. No credential reader, refresher, or private
+endpoint belongs in that boundary.
 
-## Risks in the current design
+## Risks in the historical design
 
 Directly reading and rewriting another product's credential store exposes an
 access token, refresh token, scopes, and expiry metadata to PilferedParrot. A
@@ -149,12 +155,19 @@ by Anthropic's own clients.
 
 ## Migration plan
 
-1. Add capability interfaces and fixtures first, with the existing normalized
-   budget model retained only for compatibility at its API boundary.
-2. Introduce CLI-owned authentication status and an unavailable allowance state;
-   keep existing execution and per-turn token telemetry unchanged.
-3. Deprecate the direct Claude allowance source with a clear release note and
-   feature-independent fallback. Remove the credential-file reader/writer,
+Migration steps 1–3 are implemented in PilferedParrot 0.5.0. Steps 4–5 remain
+future constraints if organization reporting or further schema work is ever
+undertaken.
+
+1. **Implemented in 0.5.0.** Add capability interfaces and fixtures first,
+   with the existing normalized budget model retained only for compatibility
+   at its API boundary.
+2. **Implemented in 0.5.0.** Introduce CLI-owned authentication status and an
+   unavailable allowance state; keep existing execution and per-turn token
+   telemetry unchanged.
+3. **Implemented in 0.5.0.** Deprecate the direct Claude allowance source with
+   a clear release note and feature-independent fallback. Remove the
+   credential-file reader/writer,
    refresh code, hard-coded client ID, private URLs, beta header, and their
    tests only in the implementation release that performs that behavior change.
 4. Add organization reporters only behind explicit administrator configuration
@@ -186,8 +199,9 @@ by Anthropic's own clients.
 
 ## Non-goals and unsupported approaches
 
-- This is not an implementation authorization and does not add an Anthropic
-  integration, credential collection, authentication change, or runtime probe.
+- The original research record was not implementation authorization and did
+  not itself add an Anthropic integration, credential collection,
+  authentication change, or runtime probe.
 - Do not use `/api/oauth/usage`, `platform.claude.com/v1/oauth/token`, a
   Claude Code credential-file schema, an embedded OAuth client ID, a beta header,
   reverse-engineered CLI traffic, browser/session cookies, or third-party

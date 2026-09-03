@@ -89,11 +89,35 @@ The browser shows:
 - a one-click terminal button on single-line command blocks in completed assistant responses;
 - whether local Qwen is ready;
 - Codex, Claude, and Gemini CLI sign-in/availability status;
-- Codex and Claude's provider-reported included-usage amounts and reset times.
+- Codex's provider-reported included-usage amount and reset time, plus a clear unavailable state
+  when a provider has no supported live allowance source.
 
 The project folder shown in the header is the primary writable workspace. Change it before the
 first message when starting work in another checkout. PilferedParrot rejects a clear first-turn request
 to modify a different, unapproved project before spending a provider turn.
+
+### Safe Markdown rendering
+
+The work and Chat surfaces use the same dependency-free renderer and escape all input before
+adding supported formatting. The supported subset is ATX headings, paragraphs and hard line
+breaks, `*`/`_` emphasis, `**`/`__` strong text, inline code, flat ordered and unordered lists,
+blockquotes, horizontal rules, delimiter-row tables, complete triple-backtick fenced code blocks,
+and absolute `http`, `https`, and `mailto` links. Raw HTML, images, relative links, nested inline
+formatting, indented code, and the rest of CommonMark are displayed as text rather than interpreted.
+
+Fences must open and close on their own lines; an optional single language name is allowed.
+Unmatched or inline backticks stay visible as text. Tables require at least two columns and a valid
+hyphen delimiter row, and `\|` preserves a literal pipe within a cell, so ordinary pipe-containing
+prose is not treated as a table. Quotes are parsed to 16 levels; deeper quote markers remain visible
+escaped text. Long responses are not silently truncated by the renderer, and unsafe HTML remains
+escaped regardless of length.
+
+The terminal action is narrower than display Markdown: it appears only for a complete, top-level
+fence in a completed assistant response when the fence is unlabeled or uses a recognized shell
+language, contains exactly one non-empty line, and is no longer than 4,000 characters. Fences in
+quotes, user messages, unmatched fences, multiline commands, oversized commands, and non-shell
+languages are display-only. The server revalidates the stored message and these same conditions
+before launching anything.
 
 Codex can also work across a small, explicit set of related checkouts without disabling its
 sandbox. Add those directories to the machine-local `config.json`:
@@ -139,18 +163,34 @@ once per minute while the browser is open. OpenAI notes that local messages and 
 a rolling five-hour window and that additional weekly limits may apply; exact consumption depends
 on the model and task size. See the [official Codex pricing and usage documentation](https://learn.chatgpt.com/docs/pricing).
 
-For a signed-in Claude Code account, the sidebar shows compact current-session and weekly
-allowance bars with a live reset countdown; hovering the reset shows the exact local date and time.
-Model-specific weekly windows remain available to diagnostics without taking permanent sidebar
-space. This check uses the CLI's stored OAuth credential and does not send a model prompt.
+Claude Code authentication is entirely owned by the Claude CLI. PilferedParrot reads only the
+non-secret result of `claude auth status --json`; it does not read or write Claude credential files,
+access OAuth tokens from the environment, refresh tokens, or call private token or allowance
+endpoints. Anthropic does not provide a supported live personal plan-allowance interface for this
+use, so a signed-in Claude installation remains ready to run while the sidebar explains that live
+allowance data is unavailable. It shows no Claude allowance bar or reset countdown. Per-turn token
+and context telemetry reported by Claude execution remains available and is separate from account
+allowance reporting.
+
+Authentication normalization trusts only a successful CLI result whose supported `loggedIn` field
+is explicitly `true` or `false`. Missing CLI, timeout, nonzero exit, malformed JSON, and a successful
+result without that boolean normalize to unknown. The supported status output has no reliable token
+expiration state, so expiration-like failures also normalize to unknown instead of being inferred
+from free-form stdout or stderr.
+
+This release removes the former direct Claude OAuth allowance integration. Existing chat history
+and historical ledger records are left intact; older ledger snapshots may still contain Claude
+windows recorded by an earlier version, but they are historical data and are not reused as a live
+quota. Organization analytics reporting is not implemented.
 
 ## Context and token behavior
 
 PilferedParrot deliberately keeps the provider path thin:
 
 All execution goes through a `ProviderAdapter` contract for run/resume/cancel, normalized progress,
-token and context usage, capabilities, authentication, availability, and model discovery. Codex,
-Claude, Gemini, and OpenAI-compatible endpoints retain separate implementations behind that contract.
+per-turn token and context usage, capabilities, authentication, execution availability, allowance
+reporting availability, and model discovery. Codex, Claude, Gemini, and OpenAI-compatible endpoints
+retain separate implementations behind that contract.
 
 - A Codex turn receives the user's prompt directly. PilferedParrot does not prepend a policy document,
   route request, reviewer brief, or hidden board content. Chat is informational and does not interpret,
@@ -228,7 +268,7 @@ turns; it does not disable those controls.
 Claude Code likewise owns its authentication, tool permissions, settings, and network behavior.
 PilferedParrot uses Claude's print-mode CLI and resumes only the session ID returned by Claude.
 Account actions use `claude auth login`, `claude auth status`, and `claude auth logout` when
-supported by the installed CLI.
+supported by the installed CLI. Allowance-reporting availability never gates Claude execution.
 
 The browser API uses separate dashboard and Chat capabilities, delivered in URL fragments and
 kept out of `/api/state`. Browser mutations must come from the server's exact origin; a capability
