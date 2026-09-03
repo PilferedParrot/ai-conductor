@@ -244,6 +244,7 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .allowance-track { height: 4px; min-width: 36px; flex: 1; overflow: hidden; border-radius: 5px; background: #27313d; }
 .allowance-track span { display: block; height: 100%; border-radius: inherit; background: linear-gradient(90deg, #3b86e9, #68b5ff); }
 .allowance-reset { min-width: 0; overflow: hidden; color: var(--sidebar-faint); font-size: inherit; text-overflow: ellipsis; white-space: nowrap; }
+.usage-unavailable-note { margin: 8px 0 0; color: var(--sidebar-faint); font-size: 16px; line-height: 1.35; }
 
 .history-heading { padding: 8px 7px 0; }
 .history-group { min-height: 0; display: flex; flex-direction: column; }

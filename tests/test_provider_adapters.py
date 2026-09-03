@@ -19,7 +19,10 @@ from pilferedparrot.adapters import (
     adapter_for,
 )
 from pilferedparrot.config import load_config
-from pilferedparrot.model import Conversation
+from pilferedparrot.dispatch import RunResult
+from pilferedparrot.model import (
+    AUTH_SIGNED_IN, Conversation, ProviderBudget, USAGE_UNSUPPORTED,
+)
 
 
 class ProviderAdapterTests(unittest.TestCase):
@@ -52,6 +55,49 @@ class ProviderAdapterTests(unittest.TestCase):
             "input_tokens": 12, "output_tokens": 3, "context_window_tokens": 100,
         }))
         self.assertEqual(usage, TokenUsage(12, 3, 100))
+
+    def test_claude_capabilities_separate_telemetry_from_allowance_reporting(self):
+        config = load_config("/definitely/missing/config.json")
+        claude = adapter_for("claude", config)
+        codex = adapter_for("codex", config)
+
+        self.assertTrue(claude.capabilities.run)
+        self.assertTrue(claude.capabilities.usage)
+        self.assertFalse(claude.capabilities.allowance_reporting)
+        self.assertFalse(claude.capabilities.organization_usage_reporting)
+        self.assertTrue(codex.capabilities.allowance_reporting)
+
+    @patch("pilferedparrot.budgets.read_claude_status")
+    @patch("pilferedparrot.dispatch.capture_claude")
+    def test_claude_runs_and_records_telemetry_when_allowance_is_unsupported(
+        self, capture, status,
+    ):
+        config = load_config("/definitely/missing/config.json")
+        status.return_value = ProviderBudget(
+            "claude", True, auth_status=AUTH_SIGNED_IN,
+            usage_status=USAGE_UNSUPPORTED,
+            usage_note="Live allowance unavailable",
+        )
+        capture.return_value = RunResult(
+            "Claude completed", 0, session_id="claude-session",
+            input_tokens=17, output_tokens=9, live_context_window_tokens=256,
+        )
+        adapter = ClaudeAdapter("claude", config)
+        conversation = Conversation(provider="claude")
+
+        # Authentication status is CLI-owned and can be queried independently;
+        # execution must not require an allowance probe.
+        self.assertTrue(adapter.is_authenticated())
+        result = adapter.run("hello", Path("/tmp"), conversation)
+
+        self.assertEqual(result.text, "Claude completed")
+        self.assertEqual(result.session_id, "claude-session")
+        self.assertEqual(
+            conversation.token_usage,
+            {"input_tokens": 17, "output_tokens": 9, "context_window_tokens": 256},
+        )
+        status.assert_called_once()
+        capture.assert_called_once()
 
     @patch("pilferedparrot.dispatch.provider_command", return_value="/usr/bin/gemini")
     def test_gemini_command_uses_headless_stdin_model_and_resume(self, _command):

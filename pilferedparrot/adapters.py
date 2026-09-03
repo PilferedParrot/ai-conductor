@@ -25,7 +25,11 @@ class ProviderCapabilities:
     cancel: bool = True
     streaming: bool = True
     tools: bool = False
+    # ``usage`` is retained for compatibility and means execution-derived,
+    # per-turn token telemetry. Allowance reporting is a separate capability.
     usage: bool = False
+    allowance_reporting: bool = False
+    organization_usage_reporting: bool = False
     models: bool = False
 
 
@@ -141,7 +145,9 @@ class ProviderAdapter(ABC):
 
 
 class CodexAdapter(ProviderAdapter):
-    capabilities = ProviderCapabilities(resume=True, tools=True, usage=True, models=True)
+    capabilities = ProviderCapabilities(
+        resume=True, tools=True, usage=True, allowance_reporting=True, models=True,
+    )
 
     def run(self, prompt, cwd, conversation, cancel_event=None, on_progress=None):
         from .dispatch import capture_codex

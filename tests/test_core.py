@@ -14,9 +14,8 @@ from unittest.mock import MagicMock, call, patch
 from urllib.error import HTTPError
 
 from pilferedparrot.budgets import (
-    claude_budget_from_response, codex_budget_from_response, collect_budgets,
-    _start_command_available, qwen_available, read_claude_budget, read_claude_status,
-    read_codex_budget,
+    codex_budget_from_response, collect_budgets,
+    _start_command_available, qwen_available, read_codex_budget,
 )
 from pilferedparrot.config import (
     _SameOriginRedirectHandler, effective_model, load_config, model_catalog,
@@ -29,7 +28,7 @@ from pilferedparrot.dispatch import (
 from pilferedparrot.model import (
     AUTH_LOCAL_NO_AUTH, AUTH_SIGNED_IN, AUTH_SIGNED_OUT, AUTH_UNKNOWN,
     PROVIDERS, REACHABLE, STATUS_CLI_MISSING, STATUS_SIGNED_OUT, UNREACHABLE,
-    Conversation, ProviderBudget,
+    USAGE_UNSUPPORTED, Conversation, ProviderBudget,
 )
 from pilferedparrot.qwen import _chat_completion, ensure_qwen, run_qwen_agent
 from pilferedparrot.qwen_tools import QwenToolbox
@@ -126,87 +125,40 @@ class BudgetTests(unittest.TestCase):
             "Codex Luna · Weekly included usage",
         ])
 
-    def test_claude_usage_windows_are_normalized_as_percent_remaining(self):
-        budget = claude_budget_from_response({
-            "five_hour": {"utilization": 27.5, "resets_at": "2026-09-03T01:00:00Z"},
-            "seven_day": {"utilization": 12, "resets_at": "2026-09-08T00:00:00Z"},
-            "seven_day_opus": {"utilization": 140},
-        }, observed_at=123)
-        self.assertEqual([window.label for window in budget.windows], [
-            "5-hour included usage", "Weekly included usage", "Weekly Opus usage",
-        ])
-        self.assertEqual(
-            [window.remaining_percent for window in budget.windows], [72.5, 88, 0],
-        )
-        self.assertEqual(
-            [window.resets_at for window in budget.windows[:2]],
-            [1788397200, 1788825600],
-        )
-        self.assertEqual(budget.window.label, "Weekly Opus usage")
-        self.assertEqual(budget.observed_at, 123)
-
-    @patch("pilferedparrot.budgets.time.time", return_value=456)
-    @patch("pilferedparrot.budgets.urllib.request.urlopen")
-    @patch("pilferedparrot.budgets._claude_access_token", return_value="test-token")
-    def test_claude_usage_probe_uses_oauth_endpoint_without_a_model_prompt(
-        self, _token, open_url, _time,
+    @patch("pilferedparrot.budgets.resolve_command", return_value="/usr/bin/claude")
+    @patch("pilferedparrot.budgets.subprocess.run")
+    def test_claude_collection_uses_only_cli_auth_and_reports_unsupported_usage(
+        self, run, _resolve,
     ):
-        response = MagicMock()
-        response.read.return_value = json.dumps({
-            "five_hour": {"utilization": 10, "resets_at": "2026-09-03T01:00:00Z"},
-        }).encode()
-        open_url.return_value.__enter__.return_value = response
+        config = load_config(Path("/definitely/missing/config.json"))
+        config["_hidden_providers"] = ["qwen", "codex", "gemini"]
+        run.return_value = subprocess.CompletedProcess(
+            [], 0, json.dumps({
+                "loggedIn": True,
+                "authMethod": "claude.ai",
+                "email": "private@example.com",
+            }), "",
+        )
 
-        budget = read_claude_budget(load_config(Path("/definitely/missing/config.json")))
+        with patch("pilferedparrot.budgets.Path.read_text",
+                   side_effect=AssertionError("credential file read")), \
+             patch.object(os.environ, "get",
+                          side_effect=AssertionError("OAuth environment access")), \
+             patch("pilferedparrot.budgets.urllib.request.urlopen",
+                   side_effect=AssertionError("unexpected OAuth/usage request")):
+            budget = collect_budgets(config)["claude"]
 
-        request = open_url.call_args.args[0]
-        self.assertEqual(request.full_url, "https://api.anthropic.com/api/oauth/usage")
-        self.assertEqual(request.get_header("Authorization"), "Bearer test-token")
-        self.assertEqual(budget.window.remaining_percent, 90)
-        self.assertEqual(budget.observed_at, 456)
-
-    @patch("pilferedparrot.budgets.time.time", return_value=1_000)
-    @patch("pilferedparrot.budgets.urllib.request.urlopen")
-    def test_claude_usage_probe_refreshes_and_preserves_rotating_oauth_credentials(
-        self, open_url, _time,
-    ):
-        with tempfile.TemporaryDirectory() as directory, patch.dict(
-            os.environ, {"CLAUDE_CONFIG_DIR": directory}, clear=False,
-        ):
-            credentials = Path(directory) / ".credentials.json"
-            credentials.write_text(json.dumps({
-                "mcpOAuth": {"kept": True},
-                "claudeAiOauth": {
-                    "accessToken": "expired", "refreshToken": "refresh-old",
-                    "expiresAt": 1, "scopes": ["user:profile"],
-                },
-            }))
-            refreshed = MagicMock()
-            refreshed.read.return_value = json.dumps({
-                "access_token": "access-new", "refresh_token": "refresh-new",
-                "expires_in": 3600, "refresh_token_expires_in": 7200,
-                "scope": "user:profile user:sessions:claude_code",
-            }).encode()
-            usage = MagicMock()
-            usage.read.return_value = json.dumps({
-                "five_hour": {"utilization": 20},
-            }).encode()
-            open_url.side_effect = [
-                MagicMock(__enter__=MagicMock(return_value=refreshed)),
-                MagicMock(__enter__=MagicMock(return_value=usage)),
-            ]
-
-            budget = read_claude_budget(load_config(Path(directory) / "missing.json"))
-            saved = json.loads(credentials.read_text())
-
-        refresh_request = open_url.call_args_list[0].args[0]
-        usage_request = open_url.call_args_list[1].args[0]
-        self.assertEqual(refresh_request.full_url, "https://platform.claude.com/v1/oauth/token")
-        self.assertEqual(usage_request.get_header("Authorization"), "Bearer access-new")
-        self.assertEqual(saved["claudeAiOauth"]["refreshToken"], "refresh-new")
-        self.assertEqual(saved["claudeAiOauth"]["expiresAt"], 4_600_000)
-        self.assertEqual(saved["mcpOAuth"], {"kept": True})
-        self.assertEqual(budget.window.remaining_percent, 80)
+        run.assert_called_once_with(
+            ["/usr/bin/claude", "auth", "status", "--json"],
+            capture_output=True, text=True, timeout=5,
+        )
+        self.assertTrue(budget.available)
+        self.assertEqual(budget.auth_status, AUTH_SIGNED_IN)
+        self.assertEqual(budget.usage_status, USAGE_UNSUPPORTED)
+        self.assertIsNone(budget.window)
+        self.assertEqual(budget.windows, ())
+        self.assertIsNone(budget.observed_at)
+        self.assertNotIn("private@example.com", json.dumps(budget.as_dict()))
 
 
 class CommandResolutionTests(unittest.TestCase):
@@ -448,42 +400,6 @@ class CommandResolutionTests(unittest.TestCase):
         self.assertEqual(qwen.auth_status, AUTH_LOCAL_NO_AUTH)
         self.assertEqual(qwen.reachability, REACHABLE)
         self.assertEqual(qwen.as_dict()["auth_status"], "local_no_auth")
-
-    @patch("pilferedparrot.budgets.read_claude_budget")
-    @patch("pilferedparrot.budgets.resolve_command", return_value="/usr/bin/claude")
-    @patch("pilferedparrot.budgets.subprocess.run")
-    def test_claude_auth_status_is_reported_without_exposing_account_details(
-        self, run, _resolve, usage,
-    ):
-        run.return_value = subprocess.CompletedProcess(
-            [], 0, json.dumps({
-                "loggedIn": True, "authMethod": "claude.ai", "email": "private@example.com",
-            }), "",
-        )
-        usage.return_value = claude_budget_from_response({
-            "five_hour": {"utilization": 25, "resets_at": "2026-09-03T01:00:00Z"},
-        })
-        status = read_claude_status(load_config(Path("/definitely/missing/config.json")))
-        self.assertEqual(status.auth_status, AUTH_SIGNED_IN)
-        self.assertEqual(status.reachability, REACHABLE)
-        self.assertEqual(status.window.remaining_percent, 75)
-        self.assertNotIn("private@example.com", status.note)
-
-    @patch("pilferedparrot.budgets.read_claude_budget", side_effect=OSError("offline"))
-    @patch("pilferedparrot.budgets.resolve_command", return_value="/usr/bin/claude")
-    @patch("pilferedparrot.budgets.subprocess.run")
-    def test_claude_usage_failure_preserves_verified_sign_in(
-        self, run, _resolve, _usage,
-    ):
-        run.return_value = subprocess.CompletedProcess(
-            [], 0, json.dumps({"loggedIn": True, "authMethod": "claude.ai"}), "",
-        )
-        status = read_claude_status(load_config(Path("/definitely/missing/config.json")))
-        self.assertTrue(status.available)
-        self.assertEqual(status.auth_status, AUTH_SIGNED_IN)
-        self.assertEqual(status.reachability, REACHABLE)
-        self.assertIn("usage unavailable", status.note)
-
 
 class QwenToolTests(unittest.TestCase):
     def _config(self):
@@ -879,6 +795,9 @@ class WebStoreTests(unittest.TestCase):
         claude = next(provider for provider in state["providers"] if provider["id"] == "claude")
         self.assertEqual(claude["auth_mode"], "cli")
         self.assertIn("claude.ai", claude["login_help"])
+        self.assertFalse(claude["capabilities"]["allowance_reporting"])
+        codex = next(provider for provider in state["providers"] if provider["id"] == "codex")
+        self.assertTrue(codex["capabilities"]["allowance_reporting"])
         gemini = next(provider for provider in state["providers"] if provider["id"] == "gemini")
         self.assertTrue(gemini["capabilities"]["resume"])
         self.assertTrue(gemini["capabilities"]["models"])
@@ -1190,14 +1109,24 @@ class WebStoreTests(unittest.TestCase):
                 handler.do_GET()
                 return handler
 
-            budget = ProviderBudget("codex", True)
-            with patch.object(app, "budgets", return_value={"codex": budget}) as budgets:
+            budget = ProviderBudget(
+                "claude", True, auth_status=AUTH_SIGNED_IN, reachability=REACHABLE,
+                usage_status=USAGE_UNSUPPORTED,
+                usage_note="Live allowance unavailable",
+            )
+            with patch.object(app, "budgets", return_value={"claude": budget}) as budgets:
                 handler = request({
                     "Host": "127.0.0.1:8765",
                     "X-PilferedParrot-Capability": app.dashboard_capability,
                 })
             budgets.assert_called_once_with()
-            handler._json.assert_called_once_with({"codex": budget.as_dict()})
+            handler._json.assert_called_once_with({"claude": budget.as_dict()})
+            public = budget.as_dict()
+            self.assertTrue(public["available"])
+            self.assertEqual(public["auth_status"], "signed_in")
+            self.assertEqual(public["usage_status"], "unsupported")
+            self.assertIsNone(public["window"])
+            self.assertEqual(public["windows"], [])
 
             for capability in (app.issue_capability("chat"), "wrong"):
                 handler = request({
@@ -2004,18 +1933,24 @@ class WebStoreTests(unittest.TestCase):
             stderr=subprocess.DEVNULL,
         )
 
-    def test_direct_provider_runs_without_budget_or_router_turn(self):
+    def test_claude_runs_without_usage_collection_or_router_turn(self):
         with tempfile.TemporaryDirectory() as directory:
             app = PilferedParrotApp(_web_config(directory), Path(directory))
-            chat = app.create_chat({"provider": "codex", "cwd": directory})
+            chat = app.create_chat({"provider": "claude", "cwd": directory})
             with patch.object(app, "budgets") as budgets, \
                  patch("pilferedparrot.web.capture_dispatch",
-                       return_value=RunResult("done", 0, "codex-thread")) as dispatch:
-                app.send_message(chat["id"], {"content": "fix it", "provider": "codex"})
+                       return_value=RunResult(
+                           "done", 0, "claude-thread", input_tokens=12, output_tokens=4,
+                       )) as dispatch:
+                app.send_message(chat["id"], {"content": "fix it", "provider": "claude"})
                 updated = self._wait_for_chat(app, chat["id"])
             budgets.assert_not_called()
-            self.assertEqual(dispatch.call_args.args[0], "codex")
+            self.assertEqual(dispatch.call_args.args[0], "claude")
             self.assertEqual(updated["messages"][-1]["content"], "done")
+            self.assertEqual(
+                app.store.get(chat["id"])["last_turn_usage"],
+                {"input_tokens": 12, "output_tokens": 4},
+            )
 
     def test_first_turn_rejects_unapproved_project_mismatch_before_dispatch(self):
         with tempfile.TemporaryDirectory() as directory:

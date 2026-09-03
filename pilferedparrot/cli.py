@@ -11,7 +11,7 @@ from .budgets import collect_budgets
 from .config import load_config
 from .dispatch import dispatch
 from .ledger import append_run
-from .model import Conversation, PROVIDERS, ProviderBudget
+from .model import AUTH_SIGNED_IN, USAGE_AVAILABLE, Conversation, PROVIDERS, ProviderBudget
 from .qwen import ensure_qwen
 
 
@@ -20,6 +20,13 @@ def budget_text(budget: ProviderBudget) -> str:
         return f"{budget.status_label} ({budget.note})" if budget.note else budget.status_label
     if budget.provider == "qwen":
         return budget.note or "local"
+    if budget.usage_status != USAGE_AVAILABLE:
+        if budget.usage_note:
+            prefix = "signed in; " if budget.auth_status == AUTH_SIGNED_IN else ""
+            return prefix + budget.usage_note
+        # An absent backend explanation is not grounds for an invented usage
+        # warning. Authentication/readiness details still remain useful.
+        return budget.note or "ready"
     windows = budget.windows or ((budget.window,) if budget.window else ())
     if windows:
         return "; ".join(

@@ -448,22 +448,20 @@ function codexWeeklyWindow(budget) {
     || weekly[0] || null;
 }
 
-function claudeSidebarWindows(budget) {
-  const windows = budgetWindows(budget);
-  const session = windows.find((window) =>
-    window.window_minutes === 300 || /\b5[ -]?hour\b/i.test(window.label || ""));
-  const weekly = windows.find((window) =>
-    (window.window_minutes === 10080 || /\bweekly\b/i.test(window.label || ""))
-    && !/\b(?:sonnet|opus)\b/i.test(window.label || ""));
-  return [session, weekly].filter(Boolean);
-}
-
 function providerUsageWindows(provider, budget) {
   if (provider === "codex") {
     const weekly = codexWeeklyWindow(budget);
     return weekly ? [weekly] : [];
   }
-  return provider === "claude" ? claudeSidebarWindows(budget) : [];
+  return [];
+}
+
+function providerUsageUnavailableMarkup(budget) {
+  // Usage availability is an adapter-owned contract. Keep this rendering
+  // provider-neutral and only show a note when the backend supplied one.
+  if (!["unavailable", "unsupported"].includes(budget?.usage_status)
+      || !budget?.usage_note) return "";
+  return `<p class="usage-unavailable-note">${escapeHtml(budget.usage_note)}</p>`;
 }
 
 function allowanceResetTime(timestamp) {
@@ -499,13 +497,6 @@ function allowanceResetTime(timestamp) {
 }
 
 function allowanceLabel(provider, window) {
-  if (provider !== "claude") return window.label || "Included usage";
-  if (window.window_minutes === 300 || /\b5[ -]?hour\b/i.test(window.label || "")) {
-    return "Current session";
-  }
-  if (window.window_minutes === 10080 || /\bweekly\b/i.test(window.label || "")) {
-    return "Weekly";
-  }
   return window.label || "Included usage";
 }
 
@@ -539,11 +530,13 @@ function renderProviders() {
     const status = reachability ? `${auth} · ${reachability}` : auth;
     const allowances = providerUsageWindows(provider, budget)
       .map((window) => allowanceMarkup(provider, window)).join("");
+    const usageUnavailable = providerUsageUnavailableMarkup(budget);
     const model = modelLabel(provider, "");
     return `<div class="provider-card" title="${escapeHtml(budget.note || label)}">
       <div class="provider-card-head"><span><i class="status-dot ${budget.reachability === "reachable" ? "available" : ""}"></i><strong>${escapeHtml(label)}</strong></span><b>${escapeHtml(status)}</b></div>
       ${model === "Provider-selected model" ? "" : `<div class="provider-model">${escapeHtml(model)}</div>`}
       ${allowances ? `<div class="allowances">${allowances}</div>` : ""}
+      ${usageUnavailable}
     </div>`;
   }).join("");
   renderProviderConnections();

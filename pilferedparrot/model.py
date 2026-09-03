@@ -142,6 +142,13 @@ AUTH_LOCAL_NO_AUTH = "local_no_auth"
 REACHABLE = "reachable"
 UNREACHABLE = "unreachable"
 
+# Usage reporting is independent of authentication and execution readiness.
+# In particular, a signed-in CLI may be fully usable even when its provider
+# exposes no supported live allowance interface.
+USAGE_AVAILABLE = "available"
+USAGE_UNAVAILABLE = "unavailable"
+USAGE_UNSUPPORTED = "unsupported"
+
 STATUS_LABELS = {
     STATUS_CLI_MISSING: "CLI not found",
     STATUS_SIGNED_OUT: "signed out",
@@ -152,6 +159,8 @@ STATUS_LABELS = {
 @dataclass(frozen=True)
 class ProviderBudget:
     provider: str
+    # Execution readiness. This deliberately does not imply live allowance
+    # reporting; consult ``usage_status`` for that independent capability.
     available: bool
     window: BudgetWindow | None = None
     observed_at: int | None = None
@@ -160,6 +169,8 @@ class ProviderBudget:
     windows: tuple[BudgetWindow, ...] = ()
     auth_status: str = AUTH_UNKNOWN
     reachability: str = UNREACHABLE
+    usage_status: str = USAGE_UNSUPPORTED
+    usage_note: str | None = None
 
     @property
     def status_label(self) -> str:
@@ -177,6 +188,8 @@ class ProviderBudget:
             "windows": [window.as_dict() for window in windows],
             "auth_status": self.auth_status,
             "reachability": self.reachability,
+            "usage_status": self.usage_status,
+            "usage_note": self.usage_note,
         }
 
 
