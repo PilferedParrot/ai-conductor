@@ -41,6 +41,8 @@ if [ -n "$browser" ]; then
 fi
 
 if command -v xdg-open >/dev/null 2>&1; then
+    # xdg-open normally returns as soon as it hands the URL to a browser, so
+    # the document's pagehide notification owns window-close detection here.
     exec xdg-open "$url"
 fi
 

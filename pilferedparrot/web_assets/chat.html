@@ -11,7 +11,7 @@
 </head>
 <body class="chat-window-body">
   <main class="chat-window" aria-label="Chat window">
-    <aside class="chat-window-sidebar" aria-label="Chat controls and history">
+    <aside class="chat-window-sidebar" id="chatWindowSidebar" aria-label="Chat controls and history">
       <div class="brand-row chat-window-brand">
         <div class="brand" aria-label="PilferedParrot Chat">
           <img class="brand-mark" src="/pilferedparrot-icon.png" alt="">
@@ -21,35 +21,48 @@
                 aria-label="Close chat controls" title="Close chat controls">×</button>
       </div>
 
-      <button class="chat-new-chat" id="resetChat" type="button"
+      <button class="chat-new-chat" id="resetChat" type="button" disabled
+              aria-label="Start a new chat"
               title="Archive the current chat and start a new one">
         <span aria-hidden="true">＋</span> New chat
       </button>
-
-      <section class="chat-model-card" aria-labelledby="chatModelHeading">
-        <label id="chatModelHeading" for="chatModelSelect">Chat model</label>
-        <select id="chatModelSelect" aria-label="Chat model">
-          <option value="gpt-5.6-terra">GPT-5.6 Terra</option>
-          <option value="gpt-5.6-luna">GPT-5.6 Luna</option>
-        </select>
-        <p>Independent, read-only Chat instance</p>
-      </section>
-
-      <section class="chat-window-context" aria-labelledby="chatContextHeading">
-        <div class="history-heading" id="chatContextHeading">Context window</div>
-        <div class="context-pie-card" id="chatContext"></div>
-      </section>
 
       <section class="history-group chat-window-history" aria-labelledby="chatHistoryHeading">
         <div class="history-heading" id="chatHistoryHeading">Chat history</div>
         <nav class="chat-list" id="chatHistoryList" aria-label="Chat history"></nav>
       </section>
+
+      <section class="chat-model-card" aria-labelledby="chatModelHeading">
+        <label id="chatModelHeading" for="chatModelSelect">Chat model</label>
+        <select id="chatModelSelect" aria-label="Chat model" disabled>
+          <option value="">Loading provider models…</option>
+        </select>
+        <p>Independent, read-only Chat instance</p>
+      </section>
+
+      <button class="chrome-theme-button" id="notificationPreferences" type="button" disabled
+              title="Manage desktop notifications">
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>
+        </svg>
+        <span id="notificationPreferencesLabel">Desktop notifications</span>
+      </button>
+
+      <section class="chat-window-context" aria-labelledby="chatContextHeading">
+        <div class="history-heading" id="chatContextHeading">Context window</div>
+        <div class="context-pie-card" id="chatContext"></div>
+      </section>
     </aside>
+
+    <div class="pane-resizer chat-sidebar-resizer" id="chatResizer" role="separator"
+         aria-label="Resize chat sidebar" aria-controls="chatWindowSidebar"
+         aria-orientation="vertical" tabindex="0"></div>
 
     <section class="chat-window-conversation" aria-label="Chat conversation">
       <header class="chat-header">
         <button class="icon-button chat-sidebar-toggle" id="toggleChatSidebar" type="button"
-                aria-label="Open chat controls" title="Open chat controls">☰</button>
+                aria-label="Open chat controls" title="Open chat controls"
+                aria-controls="chatWindowSidebar" aria-expanded="false">☰</button>
         <div>
           <div class="chat-title" id="chatThreadTitle">Chat</div>
           <div class="chat-subtitle" id="chatIdentity">GPT-5.6 Terra</div>
@@ -58,17 +71,17 @@
       <section class="chat-messages" id="chatMessages" aria-live="polite"></section>
       <footer class="chat-composer-wrap">
         <form class="chat-composer" id="chatComposer">
-          <textarea id="chatPrompt" rows="1" placeholder="Ask Chat…" aria-label="Message Chat"></textarea>
+          <textarea id="chatPrompt" rows="1" maxlength="40000" disabled placeholder="Ask Chat…" aria-label="Message Chat"></textarea>
           <div class="chat-composer-bar">
             <button type="button" class="cancel-run hidden" id="cancelChat"
                     aria-label="Cancel Chat response" title="Cancel Chat response">■</button>
-            <button type="submit" class="send-button" id="sendChat" aria-label="Send to Chat">↑</button>
+            <button type="submit" class="send-button" id="sendChat" aria-label="Send to Chat" disabled>↑</button>
           </div>
         </form>
       </footer>
     </section>
   </main>
-  <div class="toast" id="toast"></div>
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/chat.js"></script>
 </body>
 </html>

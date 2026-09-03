@@ -1,36 +1,158 @@
 const $ = (selector) => document.querySelector(selector);
 const state = {
   chats: [], budgets: {}, activeId: null, defaultCwd: "", draftCwd: "",
-  csrfToken: "", models: {}, model_catalog: {}, default_provider: "codex",
-  model_context_windows: {},
+  capability: "", models: {}, model_catalog: {}, default_provider: "codex",
+  model_context_windows: {}, browser_theme: { active: false }, budgetsLoaded: false,
+  windowId: "main", windowProvider: "codex", providerModels: {}, authPending: {},
+  authConfirmation: {}, authCodes: {}, providers: [], provider_templates: [],
+  providerDraft: null, preferences: {}, modelPolls: {},
+  initialized: false,
 };
+const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
+const WINDOW_ID_SESSION_KEY = "pilferedparrot-dashboard-window-id";
+const ACTIVE_CHAT_SESSION_KEY = "pilferedparrot-dashboard-active-chat";
+const fragment = new URLSearchParams(location.hash.slice(1));
+const fragmentCapability = fragment.get("capability") || "";
+const fragmentProvider = fragment.get("provider") || "";
+const fragmentWindowId = fragment.get("window") || "";
+const fragmentCwd = fragment.get("cwd") || "";
+// Set when no inherited or configured folder was usable for this provider:
+// the window still opens, and asks for a folder instead of starting a chat.
+const fragmentPickProject = fragment.get("pick") === "1";
+const fragmentModel = fragment.get("model") || "";
+// The launcher supplies the capability fragment on every explicit app open.
+// We remove it from the URL below, so a normal reload can be distinguished.
+const launchedFromApp = Boolean(fragmentCapability);
+try {
+  state.capability = fragmentCapability || sessionStorage.getItem(CAPABILITY_SESSION_KEY) || "";
+  if (fragmentCapability) sessionStorage.setItem(CAPABILITY_SESSION_KEY, fragmentCapability);
+  state.windowId = fragmentWindowId || sessionStorage.getItem(WINDOW_ID_SESSION_KEY) || "main";
+  if (fragmentWindowId) sessionStorage.setItem(WINDOW_ID_SESSION_KEY, fragmentWindowId);
+} catch {
+  state.capability = fragmentCapability;
+  state.windowId = fragmentWindowId || "main";
+}
+if (fragmentCapability) history.replaceState(null, "", location.pathname + location.search);
 let pollTimer = null;
 let budgetPollTimer = null;
 let budgetRefresh = null;
+let themeBackgroundObjectUrl = null;
+let terminalTarget = null;
+let providerLogoutTarget = null;
+let pendingLaunchModel = null;
+let projectSubmitPending = false;
+let createChatPending = false;
+let toastTimer = null;
+let notificationPermissionPending = false;
+let stateRequestSequence = 0;
+let stateAppliedSequence = 0;
+const documentId = globalThis.crypto?.randomUUID?.()
+  || `document-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const BUDGET_POLL_MS = 60_000;
+const CHAT_WINDOW_WIDTH = 871;
+const CHAT_WINDOW_HEIGHT = 376;
 const PANE_WIDTHS_KEY = "pilferedparrot-pane-widths";
+const DEFAULT_PROMPT_PLACEHOLDER = "Describe what you want done";
+const FORK_PROMPT_SUGGESTION = "Help me create my own version of the Pilfered Parrot interface, then ask me what I'd like to change.";
+let promptSuggestion = "";
+let promptSuggestionSelections = 0;
 const PANE_LIMITS = {
   sidebar: { min: 220, max: 480, variable: "--sidebar-width" },
 };
 
 function activeChat() { return state.chats.find((chat) => chat.id === state.activeId); }
+function visibleChats() {
+  return state.chats.filter((chat) =>
+    (chat.window_id || "main") === state.windowId
+    && (chat.requested_provider || chat.provider) === state.windowProvider);
+}
 function pendingMessage(chat = activeChat()) { return chat?.messages?.find((message) => message.pending); }
 function activeRunning() { return Boolean(pendingMessage()); }
 function anyRunning() { return state.chats.some((chat) => pendingMessage(chat)); }
 
+function notificationPermissionDecision() {
+  return state.preferences?.notification_permission || "unasked";
+}
+
+function notificationPermissionLabel() {
+  const decision = notificationPermissionDecision();
+  return {
+    unasked: "Enable desktop notifications",
+    granted: "Desktop notifications enabled · Reset",
+    denied: "Desktop notifications denied · Reset",
+    dismissed: "Desktop notifications dismissed · Reset",
+    unavailable: "Desktop notifications unavailable · Reset",
+  }[decision];
+}
+
+async function saveNotificationPermission(decision) {
+  state.preferences = await api("/api/preferences/notifications", {
+    method: "POST", body: JSON.stringify({ decision }),
+  });
+  render();
+}
+
+async function requestNotificationPermission() {
+  if (notificationPermissionPending || notificationPermissionDecision() !== "unasked") return;
+  notificationPermissionPending = true;
+  render();
+  try {
+    if (!("Notification" in globalThis)) {
+      await saveNotificationPermission("unavailable");
+      return;
+    }
+    const current = Notification.permission;
+    if (current === "granted" || current === "denied") {
+      await saveNotificationPermission(current);
+      return;
+    }
+    const result = await Notification.requestPermission();
+    await saveNotificationPermission(result === "granted" || result === "denied" ? result : "dismissed");
+  } catch (error) {
+    try { await saveNotificationPermission("dismissed"); }
+    catch (_saveError) { toast(error.message, "error"); }
+  } finally {
+    notificationPermissionPending = false;
+    render();
+  }
+}
+
+async function manageNotificationPermission() {
+  if (notificationPermissionDecision() === "unasked") {
+    await requestNotificationPermission();
+    return;
+  }
+  await saveNotificationPermission("unasked");
+  toast("Notification preference reset. Select Enable desktop notifications to ask again.", "success");
+}
+
+function notifyCompletion(body = "Your response is ready.", tag = "pilferedparrot-finished") {
+  if (notificationPermissionDecision() !== "granted"
+      || !("Notification" in globalThis) || Notification.permission !== "granted") return;
+  try {
+    new Notification("PilferedParrot finished", {
+      body, icon: "/pilferedparrot-icon.png", tag,
+    });
+  } catch (_error) { /* Completion remains visible in the work session. */ }
+}
+
 async function api(path, options = {}) {
-  const method = (options.method || "GET").toUpperCase();
-  const controlHeaders = method === "GET" || !state.csrfToken
-    ? {} : { "X-PilferedParrot-CSRF": state.csrfToken };
+  const controlHeaders = !state.capability
+    ? {} : { "X-PilferedParrot-Capability": state.capability };
   const response = await fetch(path, {
-    headers: { "Content-Type": "application/json", ...controlHeaders, ...(options.headers || {}) },
     ...options,
+    headers: { "Content-Type": "application/json", ...controlHeaders, ...(options.headers || {}) },
   });
   const data = await response.json().catch(() => ({}));
   if (response.status === 404 && path.startsWith("/api/chat/")) {
     throw new Error("Restart PilferedParrot, then reload this window.");
   }
-  if (!response.ok) throw new Error(data.error || `Request failed (${response.status})`);
+  if (!response.ok) {
+    const error = new Error(data.error || `Request failed (${response.status})`);
+    error.responseReceived = true;
+    error.status = response.status;
+    throw error;
+  }
   return data;
 }
 
@@ -72,17 +194,116 @@ function markdown(value, commandTarget = null) {
 }
 
 function providerLabel(provider) {
-  return ({ qwen: "Local Qwen", codex: "OpenAI Codex", claude: "Claude Code (history)" })[provider]
-    || provider || "Unknown";
+  return providerInfo(provider).label;
+}
+
+function providerInfo(provider) {
+  return state.providers.find((item) => item.id === provider)
+    || { id: provider, label: provider || "Unknown", description: "Configured LLM provider.", auth_mode: "cli" };
+}
+
+function providerIds() {
+  const ids = state.providers.map((item) => item.id).filter(Boolean);
+  if (!ids.length) return Object.keys(state.model_catalog || {});
+  return state.windowProvider && ids.includes(state.windowProvider)
+    ? [state.windowProvider, ...ids.filter((provider) => provider !== state.windowProvider)] : ids;
 }
 
 function defaultModel(provider) { return state.model_catalog?.[provider]?.default || ""; }
 
+function preferredModel(provider) {
+  return state.preferences?.work_models?.[provider] || defaultModel(provider);
+}
+
+function modelOptionLabel(option, provider = "") {
+  const value = String(option?.value || "");
+  const label = String(option?.label || value);
+  if (provider === "claude") return label || value;
+  return label && value && label.toLowerCase() !== value.toLowerCase()
+    ? `${label} · ${value}` : label || value;
+}
+
 function modelLabel(provider, model) {
-  const actual = model || defaultModel(provider);
-  if (!actual) return "provider default";
+  const actual = model || preferredModel(provider);
+  if (!actual) return "Provider-selected model";
   const option = state.model_catalog?.[provider]?.options?.find((item) => item.value === actual);
-  return option?.label || actual;
+  return modelOptionLabel(option || { value: actual, label: actual }, provider);
+}
+
+function providerModelChoice(provider) {
+  if (Object.prototype.hasOwnProperty.call(state.providerModels, provider)) {
+    return state.providerModels[provider];
+  }
+  const chat = provider === state.windowProvider ? activeChat() : null;
+  return chat?.requested_model || preferredModel(provider) || "";
+}
+
+function providerModelOptions(provider) {
+  const catalog = state.model_catalog?.[provider] || { default: "", options: [] };
+  const selected = providerModelChoice(provider);
+  const options = Array.isArray(catalog.options) ? [...catalog.options] : [];
+  if (selected && !options.some((item) => item.value === selected)) {
+    options.unshift({ value: selected, label: selected });
+  }
+  if (!options.length) return '<option value="">Provider-selected model</option>';
+  const providerDefault = catalog.default ? "" :
+    `<option value="" ${selected ? "" : "selected"}>Provider-selected model</option>`;
+  return providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("");
+}
+
+async function pollProviderModels(provider, select = null) {
+  if (!provider || state.modelPolls[provider]) return state.modelPolls[provider];
+  const request = (async () => {
+    if (select) select.setAttribute("aria-busy", "true");
+    try {
+      const catalog = await api(`/api/providers/${encodeURIComponent(provider)}/models`);
+      if (catalog.warning) {
+        toast(`${providerLabel(provider)} model refresh used saved choices: ${catalog.warning}`);
+      }
+      state.model_catalog[provider] = {
+        default: catalog.default || "",
+        options: Array.isArray(catalog.options) ? catalog.options : [],
+      };
+      state.model_context_windows[provider] = Object.fromEntries(
+        state.model_catalog[provider].options
+          .filter((item) => Number(item.max_context_window || item.context_window) > 0)
+          .map((item) => [item.value, Number(item.max_context_window || item.context_window)]),
+      );
+      const selected = providerModelChoice(provider);
+      if (select?.matches("[data-provider-model]")) {
+        select.innerHTML = providerModelOptions(provider);
+        select.value = selected;
+      } else if (provider === state.windowProvider) {
+        renderModelSelect(provider, activeChat()?.requested_model || selected);
+      }
+      return catalog;
+    } catch (error) {
+      toast(`Could not refresh ${providerLabel(provider)} models: ${error.message}`);
+      return null;
+    } finally {
+      if (select?.isConnected) select.removeAttribute("aria-busy");
+      delete state.modelPolls[provider];
+    }
+  })();
+  state.modelPolls[provider] = request;
+  return request;
+}
+
+const CONTEXT_ESTIMATE_DISCLOSURE = "Estimate of the next request's live context. It may change due to compaction, newly injected context, or the next user prompt.";
+const CONTEXT_INCLUDED = "Includes the transcript, system and developer instructions, tool definitions and relevant tool outputs, repository and workspace context, attachments and other prompt inputs.";
+
+function contextBreakdownMarkup(usage) {
+  const transcript = Math.max(0, Number(usage.transcript_tokens) || 0);
+  const reserved = Math.max(0, Number(usage.breakdown?.output_reservation) || 0);
+  const reservation = reserved
+    ? `<p>Response capacity reserved (not used): ${reserved.toLocaleString()} tokens</p>` : "";
+  return `<details class="context-breakdown">
+      <summary>Estimate details</summary>
+      <p>${CONTEXT_ESTIMATE_DISCLOSURE}</p>
+      <p>${CONTEXT_INCLUDED}</p>
+      <p>Transcript estimate: ${transcript.toLocaleString()} tokens</p>
+      ${reservation}
+    </details>`;
 }
 
 function contextUsageMarkup(usage, surface) {
@@ -91,17 +312,14 @@ function contextUsageMarkup(usage, surface) {
   const limit = Math.max(1, Number(usage.limit_tokens) || 1);
   const percent = Math.max(0, Math.min(100, Number(usage.percent) || 0));
   const rounded = Math.round(percent);
-  const estimate = usage.estimated
-    ? '<em class="context-estimate">Estimate</em>' : "";
-  const accuracy = "Visible-context estimate; provider limits may differ";
+  const estimate = usage.estimated ? '<em class="context-estimate">Estimate</em>' : "";
   return `<div class="context-usage-head">
-      <span class="context-usage-label">Visible context estimate</span>
-      <span class="context-usage-counts">${used.toLocaleString()} / ${limit.toLocaleString()}</span>
-      <span class="context-usage-value"><strong>${rounded}%</strong>${estimate}</span>
+      <span class="context-usage-label">Estimated context used: ${used.toLocaleString()} / ${limit.toLocaleString()} tokens (${rounded}%)</span>
+      <span class="context-usage-value">${estimate}</span>
     </div>
-    <div class="context-usage-bar" role="progressbar" aria-label="${escapeHtml(surface)} visible context estimate" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${rounded}" title="${accuracy}">
+    <div class="context-usage-bar" role="progressbar" aria-label="${escapeHtml(surface)} estimated live context used" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${rounded}" title="${CONTEXT_ESTIMATE_DISCLOSURE}">
       <span style="width:${percent}%"></span>
-    </div>`;
+    </div>${contextBreakdownMarkup(usage)}`;
 }
 
 function contextPieMarkup(usage, surface, adjustable = false) {
@@ -113,7 +331,6 @@ function contextPieMarkup(usage, surface, adjustable = false) {
   const allowance = Math.max(1, Math.min(100, Number(usage.allowance_percent) || 100));
   const percent = Math.max(0, Math.min(100, Number(usage.percent) || 0));
   const rounded = Math.round(percent);
-  const accuracy = "Visible-context estimate; provider limits may differ";
   const choices = [...new Set([25, 50, 75, 100, allowance])].sort((a, b) => a - b);
   const allowanceControl = adjustable && maximumKnown ? `<label class="context-allowance">
       <span>Allow</span>
@@ -123,23 +340,23 @@ function contextPieMarkup(usage, surface, adjustable = false) {
       <span>of ${maximum.toLocaleString()} max</span>
     </label>` : maximumKnown
     ? `<span>${allowance}% of ${maximum.toLocaleString()} max allowed</span>`
-    : '<span>Provider maximum unavailable</span>';
+    : '<span>Select or configure a model to show its maximum</span>';
   return `<div class="context-pie ${rounded >= 100 ? "limit" : rounded >= 80 ? "near-limit" : ""}"
       style="--context-percent:${percent * 3.6}deg" role="progressbar"
-      aria-label="${escapeHtml(surface)} visible context estimate" aria-valuemin="0"
-      aria-valuemax="100" aria-valuenow="${rounded}" title="${accuracy}">
+      aria-label="${escapeHtml(surface)} estimated live context used" aria-valuemin="0"
+      aria-valuemax="100" aria-valuenow="${rounded}" title="${CONTEXT_ESTIMATE_DISCLOSURE}">
       <div class="context-pie-center"><strong>${rounded}%</strong><span>used</span></div>
     </div>
     <div class="context-pie-copy">
-      <strong>${used.toLocaleString()} / ${limit.toLocaleString()} tokens</strong>
-      <span>${usage.estimated ? "Visible transcript estimate" : "Context window"}</span>
+      <strong>Estimated context used: ${used.toLocaleString()} / ${limit.toLocaleString()} tokens (${rounded}%)</strong>
       ${allowanceControl}
+      ${contextBreakdownMarkup(usage)}
     </div>`;
 }
 
 function contextUsageForModel(usage, provider, model) {
   if (!usage) return usage;
-  const selected = model || defaultModel(provider);
+  const selected = model || preferredModel(provider);
   const maximum = Number(state.model_context_windows?.[provider]?.[selected]);
   if (!(maximum > 0)) return usage;
   const allowance = Math.max(1, Math.min(100, Number(usage.allowance_percent) || 100));
@@ -156,19 +373,20 @@ function contextUsageForModel(usage, provider, model) {
 function renderModelSelect(provider, requestedModel) {
   const select = $("#modelSelect");
   const catalog = state.model_catalog?.[provider] || { default: "", options: [] };
-  const effectiveDefault = catalog.default || "";
   const options = Array.isArray(catalog.options) ? [...catalog.options] : [];
   if (provider === "codex" && !options.some((item) => item.value === "gpt-5.6-sol")) {
     options.unshift({ value: "gpt-5.6-sol", label: "GPT-5.6 Sol" });
   }
-  const requested = requestedModel || "";
+  const requested = requestedModel || preferredModel(provider) || "";
   if (requested && !options.some((item) => item.value === requested)) {
     options.unshift({ value: requested, label: requested });
   }
-  select.innerHTML = `<option value="">Default · ${escapeHtml(modelLabel(provider, effectiveDefault))}</option>`
-    + options.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(item.label)}</option>`).join("");
+  const providerDefault = catalog.default ? "" : '<option value="">Provider-selected model</option>';
+  select.innerHTML = options.length
+    ? providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("")
+    : '<option value="">Provider-selected model</option>';
   select.value = requested;
-  select.disabled = activeRunning();
+  select.disabled = !state.initialized || activeRunning();
 }
 
 function relativeTime(timestamp) {
@@ -181,16 +399,17 @@ function relativeTime(timestamp) {
 
 function renderChats() {
   const list = $("#chatList");
-  list.innerHTML = state.chats.map((chat) => `
-    <button class="chat-item ${chat.id === state.activeId ? "active" : ""}" data-chat="${chat.id}">
+  list.innerHTML = visibleChats().map((chat) => `
+    <button class="chat-item ${chat.id === state.activeId ? "active" : ""}" data-chat="${escapeHtml(chat.id)}">
       <div class="chat-item-title">${escapeHtml(chat.title)}</div>
       <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
     </button>`).join("");
   list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", () => {
     state.activeId = button.dataset.chat;
+    try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId); } catch (_error) {}
     state.draftCwd = activeChat().cwd;
     render();
-    $("#sidebar").classList.remove("open");
+    setSidebarOpen(false);
   }));
 }
 
@@ -199,6 +418,22 @@ const STATUS_TEXT = {
   signed_out: "Signed out",
   auth_unverified: "Sign-in status unknown",
 };
+const AUTH_TEXT = {
+  signed_in: "Signed in",
+  signed_out: "Signed out",
+  auth_unknown: "Sign-in unknown",
+  local_no_auth: "Local · no sign-in",
+};
+const REACHABILITY_TEXT = { unreachable: "Unreachable" };
+
+function providerReachabilityText(provider, budget) {
+  if (budget?.reachability === "reachable") return "";
+  // Qwen can be intentionally stopped between requests. When its configured
+  // launcher is available, `available` means it is ready to start on demand,
+  // not that the local endpoint is broken.
+  if (provider === "qwen" && budget?.available) return "Ready on demand";
+  return REACHABILITY_TEXT[budget?.reachability] || "Endpoint unavailable";
+}
 
 function budgetWindows(budget) {
   const windows = Array.isArray(budget?.windows) && budget.windows.length
@@ -213,36 +448,207 @@ function codexWeeklyWindow(budget) {
     || weekly[0] || null;
 }
 
-function renderProviders() {
-  const budget = state.budgets.codex
-    || { provider: "codex", available: false, status: "unknown" };
-  const title = escapeHtml(budget.note || providerLabel("codex"));
-  const weekly = codexWeeklyWindow(budget);
-  const status = budget.available ? "Connected" : (STATUS_TEXT[budget.status] || "Unavailable");
-  const allowance = weekly ? (() => {
-    const remaining = Math.max(0, Math.min(100, Number(weekly.remaining_percent)));
-    const label = "Weekly included usage";
-    const reset = weekly.resets_at
-      ? `Resets ${new Date(weekly.resets_at * 1000).toLocaleString([], { dateStyle: "short", timeStyle: "short" })}`
-      : "Reset time unavailable";
-    return `<div class="allowance-row">
-      <div class="allowance-head"><span>${escapeHtml(label)}</span><strong>${Math.round(remaining)}% left</strong></div>
-      <div class="allowance-track" role="progressbar" aria-label="${escapeHtml(label)} remaining" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(remaining)}"><span style="width:${remaining}%"></span></div>
-      <div class="allowance-reset">${escapeHtml(reset)}</div>
-    </div>`;
-  })() : `<div class="provider-detail">${escapeHtml(budget.note || status)}</div>`;
-  $("#providerList").innerHTML = `<div class="provider-card" title="${title}">
-    <div class="provider-card-head"><span><i class="status-dot ${budget.available ? "available" : ""}"></i><strong>OpenAI Codex</strong></span><b>${escapeHtml(status)}</b></div>
-    <div class="provider-model">${escapeHtml(modelLabel("codex", ""))}</div>
-    <div class="allowances">${allowance}</div>
+function claudeSidebarWindows(budget) {
+  const windows = budgetWindows(budget);
+  const session = windows.find((window) =>
+    window.window_minutes === 300 || /\b5[ -]?hour\b/i.test(window.label || ""));
+  const weekly = windows.find((window) =>
+    (window.window_minutes === 10080 || /\bweekly\b/i.test(window.label || ""))
+    && !/\b(?:sonnet|opus)\b/i.test(window.label || ""));
+  return [session, weekly].filter(Boolean);
+}
+
+function providerUsageWindows(provider, budget) {
+  if (provider === "codex") {
+    const weekly = codexWeeklyWindow(budget);
+    return weekly ? [weekly] : [];
+  }
+  return provider === "claude" ? claudeSidebarWindows(budget) : [];
+}
+
+function allowanceResetTime(timestamp) {
+  const milliseconds = Number(timestamp) * 1000;
+  const date = new Date(milliseconds);
+  if (!(milliseconds > 0) || Number.isNaN(date.getTime())) {
+    return { short: "Reset unavailable", exact: "Reset time unavailable", datetime: "" };
+  }
+  const exact = `Resets ${date.toLocaleString([], {
+    weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit",
+  })}`;
+  const minutes = Math.ceil((milliseconds - Date.now()) / 60_000);
+  if (minutes <= 0) return { short: "Reset due", exact, datetime: date.toISOString() };
+  if (minutes < 60) {
+    return { short: `Resets in ${minutes}m`, exact, datetime: date.toISOString() };
+  }
+  if (minutes < 24 * 60) {
+    const hours = Math.floor(minutes / 60);
+    const remainder = minutes % 60;
+    return {
+      short: `Resets in ${hours}h${remainder ? ` ${remainder}m` : ""}`,
+      exact,
+      datetime: date.toISOString(),
+    };
+  }
+  return {
+    short: `Resets ${date.toLocaleString([], {
+      weekday: "short", hour: "numeric",
+    })}`,
+    exact,
+    datetime: date.toISOString(),
+  };
+}
+
+function allowanceLabel(provider, window) {
+  if (provider !== "claude") return window.label || "Included usage";
+  if (window.window_minutes === 300 || /\b5[ -]?hour\b/i.test(window.label || "")) {
+    return "Current session";
+  }
+  if (window.window_minutes === 10080 || /\bweekly\b/i.test(window.label || "")) {
+    return "Weekly";
+  }
+  return window.label || "Included usage";
+}
+
+function allowanceMarkup(provider, window) {
+  const remaining = Math.max(0, Math.min(100, Number(window.remaining_percent)));
+  const reset = allowanceResetTime(window.resets_at);
+  const label = allowanceLabel(provider, window);
+  const resetMarkup = reset.datetime
+    ? `<time class="allowance-reset" datetime="${escapeHtml(reset.datetime)}" title="${escapeHtml(reset.exact)}" aria-label="${escapeHtml(reset.exact)}">${escapeHtml(reset.short)}</time>`
+    : `<span class="allowance-reset" title="${escapeHtml(reset.exact)}">${escapeHtml(reset.short)}</span>`;
+  return `<div class="allowance-row">
+    <div class="allowance-head"><span class="allowance-label">${escapeHtml(label)}</span><strong>${Math.round(remaining)}% left</strong></div>
+    <div class="allowance-meter"><div class="allowance-track" role="progressbar" aria-label="${escapeHtml(label)} remaining" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${Math.round(remaining)}"><span style="width:${remaining}%"></span></div>${resetMarkup}</div>
   </div>`;
+}
+
+function renderProviders() {
+  const providers = [state.windowProvider];
+  $("#providerList").innerHTML = providers.map((provider) => {
+    const budget = state.budgets[provider];
+    const label = providerLabel(provider);
+    if (!budget) {
+      const status = state.budgetsLoaded ? "Status unavailable" : "Checking…";
+      return `<div class="provider-card" title="${escapeHtml(`Checking ${label} connection status`)}">
+        <div class="provider-card-head"><span><i class="status-dot"></i><strong>${escapeHtml(label)}</strong></span><b>${status}</b></div>
+        <div class="provider-model">${escapeHtml(modelLabel(provider, ""))}</div>
+      </div>`;
+    }
+    const auth = AUTH_TEXT[budget.auth_status] || STATUS_TEXT[budget.status] || "Sign-in unavailable";
+    const reachability = providerReachabilityText(provider, budget);
+    const status = reachability ? `${auth} · ${reachability}` : auth;
+    const allowances = providerUsageWindows(provider, budget)
+      .map((window) => allowanceMarkup(provider, window)).join("");
+    const model = modelLabel(provider, "");
+    return `<div class="provider-card" title="${escapeHtml(budget.note || label)}">
+      <div class="provider-card-head"><span><i class="status-dot ${budget.reachability === "reachable" ? "available" : ""}"></i><strong>${escapeHtml(label)}</strong></span><b>${escapeHtml(status)}</b></div>
+      ${model === "Provider-selected model" ? "" : `<div class="provider-model">${escapeHtml(model)}</div>`}
+      ${allowances ? `<div class="allowances">${allowances}</div>` : ""}
+    </div>`;
+  }).join("");
+  renderProviderConnections();
+}
+
+function renderProviderConnections() {
+  const list = $("#providerConnectionList");
+  if (!list) return;
+  const draft = state.providerDraft ? providerDraftMarkup() : "";
+  list.innerHTML = draft + providerIds().map((provider) => {
+    const info = providerInfo(provider);
+    const budget = state.budgets[provider];
+    const pending = Boolean(state.authPending[provider]) && budget?.auth_status !== "signed_in";
+    const baseStatus = budget
+      ? STATUS_TEXT[budget.status] || AUTH_TEXT[budget.auth_status] || "Status unavailable"
+      : state.budgetsLoaded ? "Status unavailable" : "Checking…";
+    const reachability = providerReachabilityText(provider, budget);
+    const auth = pending ? "Complete sign-in in your browser"
+      : reachability ? `${baseStatus} · ${reachability}` : baseStatus;
+    const authAction = info.auth_mode !== "cli"
+      ? `<span class="provider-local-note">${escapeHtml(info.auth_label || "No sign-in required")}</span>`
+      : budget?.auth_status === "signed_in"
+        ? `<button type="button" class="secondary" data-provider-logout="${provider}">Sign out</button>`
+        : `<button type="button" class="secondary" data-provider-login="${provider}" ${pending ? "disabled" : ""}>${pending ? "Sign-in browser opened" : "Sign in"}</button>`;
+    const confirmation = pending && state.authConfirmation[provider]
+      ? `<div class="provider-auth-code">
+          <label><span>Confirmation code <small>(only if Anthropic shows one)</small></span>
+            <input data-provider-auth-code="${provider}" value="${escapeHtml(state.authCodes[provider] || "")}" placeholder="Paste the complete code#state value" autocomplete="one-time-code" autocapitalize="none" spellcheck="false">
+          </label>
+          <button type="button" data-provider-code="${provider}" ${state.authCodes[provider]?.trim() ? "" : "disabled"}>Confirm sign-in</button>
+          <small>The browser usually completes sign-in automatically. Paste its code here only when it asks you to return to Claude Code.</small>
+        </div>` : "";
+    return `<section class="provider-connection-card">
+      <div class="provider-connection-head">
+        <span><i class="status-dot ${budget?.reachability === "reachable" ? "available" : ""}"></i><strong>${escapeHtml(providerLabel(provider))}</strong>${provider === state.windowProvider ? '<em class="current-provider">Current window</em>' : ""}</span>
+        <small>${escapeHtml(auth)}</small>
+      </div>
+      <p class="provider-connection-description">${escapeHtml(info.description)}</p>
+      <label class="provider-model-field">
+        <span>Model for new window</span>
+        <select data-provider-model="${provider}" aria-label="${escapeHtml(providerLabel(provider))} model">
+          ${providerModelOptions(provider)}
+        </select>
+      </label>
+      <p class="provider-auth-help">${escapeHtml(info.auth_help || "Connection is managed by this provider.")}</p>
+      ${confirmation}
+      <div class="provider-connection-actions">
+        ${authAction}
+        <button type="button" data-provider-window="${provider}">${budget?.auth_status === "signed_in" || info.auth_mode !== "cli" ? "Use" : "Open"} ${escapeHtml(providerLabel(provider))}</button>
+        <button type="button" class="secondary" data-provider-remove="${escapeHtml(provider)}">Remove provider</button>
+      </div>
+    </section>`;
+  }).join("");
+}
+
+function providerTemplateInfo(id) {
+  return (state.provider_templates || []).find((item) => item.id === id) || {};
+}
+
+function providerDraftMarkup() {
+  const templates = Array.isArray(state.provider_templates) ? state.provider_templates : [];
+  const selected = state.providerDraft?.template || templates[0]?.id || "";
+  const template = providerTemplateInfo(selected);
+  const draft = state.providerDraft || {};
+  const options = templates.map((item) =>
+    `<option value="${escapeHtml(item.id)}" ${item.id === selected ? "selected" : ""}>${escapeHtml(item.label || item.id)}</option>`
+  ).join("");
+  const settings = template.restorable
+    ? '<p class="provider-draft-note">The complete previous configuration will be restored.</p>'
+    : `<div class="provider-draft-fields">
+      <label><span>Display name</span><input data-provider-draft-label maxlength="128" value="${escapeHtml(draft.label ?? template.label ?? "")}"></label>
+      <label><span>Model ID <small>(blank = auto-detect)</small></span><input data-provider-draft-model maxlength="128" placeholder="Discover automatically" value="${escapeHtml(draft.model ?? template.model ?? "")}"></label>
+      <label><span>Base URL</span><input data-provider-draft-base-url maxlength="512" value="${escapeHtml(draft.base_url ?? template.base_url ?? "")}"></label>
+      <label><span>API-key environment variable</span><input data-provider-draft-api-key-env maxlength="128" value="${escapeHtml(draft.api_key_env ?? template.api_key_env ?? "")}"></label>
+    </div>
+    <p class="provider-draft-note">Secrets stay in your environment; PilferedParrot stores only the provider settings above.</p>`;
+  return `<section class="provider-connection-card provider-draft-card" data-provider-draft>
+    <div class="provider-connection-head"><span><strong>Add provider</strong></span><small>${escapeHtml(template.description || "Review the connection details before adding it.")}</small></div>
+    <label class="provider-draft-field"><span>Provider template</span><select data-provider-draft-template>${options}</select></label>
+    ${settings}
+    <div class="provider-connection-actions"><button type="button" data-provider-draft-cancel class="secondary">Cancel</button><button type="button" data-provider-draft-submit>${template.restorable ? "Restore provider" : "Add provider"}</button></div>
+  </section>`;
 }
 
 async function refreshBudgets(showErrors = false) {
   if (budgetRefresh) return budgetRefresh;
   budgetRefresh = api("/api/budgets")
-    .then((budgets) => { state.budgets = budgets; renderProviders(); return budgets; })
-    .catch((error) => { if (showErrors) toast(error.message); })
+    .then((budgets) => {
+      state.budgets = budgets;
+      Object.entries(budgets).forEach(([provider, budget]) => {
+        if (budget?.auth_status === "signed_in") {
+          delete state.authPending[provider];
+          delete state.authConfirmation[provider];
+          delete state.authCodes[provider];
+        }
+      });
+      state.budgetsLoaded = true;
+      renderProviders();
+      return budgets;
+    })
+    .catch((error) => {
+      state.budgetsLoaded = true;
+      renderProviders();
+      if (showErrors) toast(error.message);
+    })
     .finally(() => { budgetRefresh = null; });
   return budgetRefresh;
 }
@@ -288,6 +694,7 @@ function renderMessages() {
   $("#welcome").classList.toggle("hidden", messages.length > 0);
   $("#messages").innerHTML = messages.map((message, messageIndex) => {
     const assistant = message.role === "assistant";
+    const role = assistant ? "assistant" : "user";
     const provider = message.provider || chat?.provider || chat?.requested_provider;
     const name = assistant
       ? `${providerLabel(provider)} · ${modelLabel(provider, message.model)}` : "You";
@@ -304,8 +711,8 @@ function renderMessages() {
     const response = message.pending
       ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>Working in ${escapeHtml(chat.cwd)}</span></div>`
       : markdown(message.content, assistant && message.id ? { messageId: message.id } : null);
-    return `<article class="message ${message.role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
-      <div class="avatar">${assistant ? provider === "qwen" ? "Q" : "O" : "Y"}</div>
+    return `<article class="message ${role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
+      <div class="avatar">${assistant ? escapeHtml(providerInfo(provider).initial || "A") : "Y"}</div>
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
       <div class="message-content">${work}${response}</div></div>
     </article>`;
@@ -418,55 +825,208 @@ function renderHeader() {
     context.innerHTML = '<div class="context-pie-empty">No context data yet</div>';
     context.className = "context-pie-card";
   }
-  const select = $("#providerSelect");
-  select.value = chat?.requested_provider || state.default_provider || "codex";
-  select.disabled = activeRunning();
-  renderModelSelect(select.value, chat?.requested_model || "");
+  renderModelSelect(state.windowProvider, chat?.requested_model || "");
 }
 
 function render() {
+  document.body.dataset.windowProvider = state.windowProvider;
   renderChats();
   renderProviders();
   renderMessages();
   renderHeader();
   const running = activeRunning();
+  const ready = state.initialized;
+  $("#prompt").disabled = !ready;
+  $("#newWorkSession").disabled = !ready || createChatPending;
+  $("#openChat").disabled = !ready;
+  $("#providerWindows").disabled = !ready;
+  $("#refreshBudgets").disabled = !ready;
+  $("#chromeTheme").disabled = !ready;
+  $("#notificationPreferences").disabled = !ready || notificationPermissionPending;
+  $("#notificationPreferencesLabel").textContent = notificationPermissionLabel();
+  $("#projectButton").disabled = !ready;
   $("#sendButton").classList.toggle("hidden", running);
-  $("#sendButton").disabled = running || !$("#prompt").value.trim();
+  $("#sendButton").disabled = !ready || running || !$("#prompt").value.trim();
   $("#cancelButton").classList.toggle("hidden", !running);
   $("#cancelButton").disabled = Boolean(pendingMessage()?.cancel_requested);
 }
 
-function toast(message) {
+function toast(message, variant = "info") {
   const node = $("#toast");
   node.textContent = message;
+  node.dataset.variant = variant;
   node.classList.add("show");
-  setTimeout(() => node.classList.remove("show"), 2800);
+  if (toastTimer !== null) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    node.classList.remove("show");
+    delete node.dataset.variant;
+    toastTimer = null;
+  }, 5200);
 }
 
-async function createChat(provider = $("#providerSelect")?.value || state.default_provider || "codex") {
-  const chat = await api("/api/chats", {
-    method: "POST",
-    body: JSON.stringify({ cwd: state.draftCwd || state.defaultCwd, provider }),
-  });
-  state.chats.unshift(chat);
-  state.activeId = chat.id;
-  state.draftCwd = chat.cwd;
-  $("#prompt").value = "";
+function choosePromptSuggestion() {
+  const showForkSuggestion = promptSuggestionSelections === 0 || Math.random() < 1 / 15;
+  promptSuggestionSelections += 1;
+  const placeholder = showForkSuggestion ? FORK_PROMPT_SUGGESTION : DEFAULT_PROMPT_PLACEHOLDER;
+  promptSuggestion = placeholder === FORK_PROMPT_SUGGESTION ? placeholder : "";
+  $("#prompt").placeholder = placeholder;
   resizePrompt();
-  render();
-  $("#prompt").focus();
+}
+
+function acceptPromptSuggestion() {
+  const prompt = $("#prompt");
+  if (prompt.value.length || !promptSuggestion) return false;
+  prompt.value = promptSuggestion;
+  prompt.setSelectionRange(prompt.value.length, prompt.value.length);
+  resizePrompt();
+  return true;
+}
+
+function promptSuggestionEndRect() {
+  if (!promptSuggestion) return null;
+  const prompt = $("#prompt");
+  const promptRect = prompt.getBoundingClientRect();
+  const style = getComputedStyle(prompt);
+  const mirror = document.createElement("div");
+  Object.assign(mirror.style, {
+    position: "fixed",
+    visibility: "hidden",
+    pointerEvents: "none",
+    left: `${promptRect.left}px`,
+    top: `${promptRect.top}px`,
+    width: `${promptRect.width}px`,
+    padding: style.padding,
+    border: "0",
+    boxSizing: "border-box",
+    font: style.font,
+    letterSpacing: style.letterSpacing,
+    lineHeight: style.lineHeight,
+    whiteSpace: "pre-wrap",
+    overflowWrap: style.overflowWrap,
+    wordBreak: style.wordBreak,
+  });
+  mirror.setAttribute("aria-hidden", "true");
+  mirror.append(document.createTextNode(promptSuggestion));
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.append(marker);
+  document.body.append(mirror);
+  const markerRect = marker.getBoundingClientRect();
+  mirror.remove();
+  return markerRect;
+}
+
+function clickedAfterPromptSuggestion(event) {
+  const end = promptSuggestionEndRect();
+  if (!end) return false;
+  return event.clientX >= end.left - 3 && event.clientX <= end.left + 36
+    && event.clientY >= end.top - 4 && event.clientY <= end.bottom + 4;
+}
+
+async function applyBrowserTheme(theme) {
+  const selected = theme?.active ? theme : { active: false };
+  const root = document.documentElement;
+  const body = document.body;
+  const properties = {
+    "--chrome-theme-frame": selected.colors?.frame,
+    "--chrome-theme-toolbar": selected.colors?.toolbar,
+    "--chrome-theme-text": selected.colors?.ntp_text,
+    "--chrome-theme-link": selected.colors?.ntp_link,
+    "--chrome-theme-section": selected.colors?.ntp_section,
+  };
+  Object.entries(properties).forEach(([name, value]) => {
+    if (/^#[0-9a-f]{6}$/i.test(value || "")) root.style.setProperty(name, value);
+    else root.style.removeProperty(name);
+  });
+  if (selected.background && selected.background_url) {
+    try {
+      const response = await fetch("/api/browser/theme/background", {
+        headers: { "X-PilferedParrot-Capability": state.capability },
+      });
+      if (!response.ok) throw new Error(`Theme background failed (${response.status})`);
+      const nextUrl = URL.createObjectURL(await response.blob());
+      if (themeBackgroundObjectUrl) URL.revokeObjectURL(themeBackgroundObjectUrl);
+      themeBackgroundObjectUrl = nextUrl;
+      root.style.setProperty("--chrome-theme-background-image", `url("${nextUrl}")`);
+      root.style.setProperty("--chrome-theme-background-position", selected.background_alignment || "center");
+      root.style.setProperty("--chrome-theme-background-repeat", selected.background_repeat || "no-repeat");
+    } catch (_error) {
+      if (themeBackgroundObjectUrl) URL.revokeObjectURL(themeBackgroundObjectUrl);
+      themeBackgroundObjectUrl = null;
+      root.style.removeProperty("--chrome-theme-background-image");
+    }
+  } else {
+    if (themeBackgroundObjectUrl) URL.revokeObjectURL(themeBackgroundObjectUrl);
+    themeBackgroundObjectUrl = null;
+    root.style.removeProperty("--chrome-theme-background-image");
+    root.style.removeProperty("--chrome-theme-background-position");
+    root.style.removeProperty("--chrome-theme-background-repeat");
+  }
+  body.classList.toggle("chrome-theme", selected.active);
+  body.dataset.chromeTheme = selected.active ? `${selected.id}:${selected.version}` : "";
+  $("#chromeThemeLabel").textContent = "Change theme";
+  state.browser_theme = selected;
+}
+
+async function refreshBrowserTheme(notify = false) {
+  const previous = document.body.dataset.chromeTheme || "";
+  const theme = await api("/api/browser/theme");
+  await applyBrowserTheme(theme);
+  const current = document.body.dataset.chromeTheme || "";
+  if (notify && current && current !== previous) {
+    toast(`Applied ${theme.name || "Chrome theme"} to PilferedParrot.`);
+  }
+}
+
+async function createChat(requestedModel = "") {
+  if (createChatPending) return null;
+  createChatPending = true;
+  $("#newWorkSession").disabled = true;
+  const provider = state.windowProvider;
+  try {
+    const chat = await api("/api/chats", {
+      method: "POST",
+      body: JSON.stringify({
+        cwd: state.draftCwd || state.defaultCwd, provider, model: requestedModel || null,
+      }),
+    });
+    state.chats.unshift(chat);
+    state.activeId = chat.id;
+    try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, chat.id); } catch (_error) {}
+    state.draftCwd = chat.cwd;
+    $("#prompt").value = "";
+    resizePrompt();
+    render();
+    $("#prompt").focus();
+    return chat;
+  } finally {
+    createChatPending = false;
+    if (state.initialized) $("#newWorkSession").disabled = false;
+  }
 }
 
 async function sendMessage(event) {
   event.preventDefault();
   const content = $("#prompt").value.trim();
-  if (!content || activeRunning()) return;
-  const selectedProvider = $("#providerSelect").value;
+  if (!state.initialized || !content || activeRunning() || createChatPending) return;
+  const selectedProvider = state.windowProvider;
   const selectedModel = $("#modelSelect").value;
-  if (!activeChat()) await createChat(selectedProvider);
+  if (!activeChat()) {
+    try {
+      await createChat();
+    } catch (error) {
+      // Chat creation can fail before the normal message request (for example
+      // when a provider rejects the selected workspace). Keep that failure
+      // visible instead of leaving the submit promise rejected silently.
+      toast(error.message);
+      return;
+    }
+  }
   const chat = activeChat();
+  const requestId = globalThis.crypto?.randomUUID?.()
+    || `request-${Date.now()}-${Math.random().toString(36).slice(2)}`;
   const optimisticUser = {
-    id: `local-${Date.now()}`, role: "user", content, created_at: Date.now() / 1000,
+    id: requestId, role: "user", content, created_at: Date.now() / 1000,
   };
   const optimisticAssistant = {
     id: `pending-${Date.now()}`, role: "assistant", content: "", pending: true,
@@ -478,6 +1038,7 @@ async function sendMessage(event) {
     chat.title = content.replace(/\s+/g, " ").slice(0, 54);
   }
   $("#prompt").value = "";
+  choosePromptSuggestion();
   resizePrompt();
   render();
   $("#conversation").scrollTop = $("#conversation").scrollHeight;
@@ -486,23 +1047,32 @@ async function sendMessage(event) {
       method: "POST",
       body: JSON.stringify({
         content, provider: selectedProvider, model: selectedModel, cwd: state.draftCwd,
+        request_id: requestId,
       }),
     });
     state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
     state.chats.sort((a, b) => b.updated_at - a.updated_at);
+    // A Qwen request may start its local server. Update the dashboard as soon
+    // as submission returns instead of waiting for the minute poll interval.
+    refreshBudgets(false);
     schedulePoll();
   } catch (error) {
     try {
+      if (error.responseReceived) throw error;
       await refreshState();
-      const reachedServer = !activeChat()?.messages?.some((message) => message.id === optimisticUser.id);
-      if (!reachedServer) throw error;
+      const accepted = state.chats.find((item) => item.id === chat.id)?.messages
+        ?.some((message) => message.id === requestId);
+      if (!accepted) throw error;
       toast(pendingMessage(activeChat())
         ? "Connection recovered; the response is still running."
         : "Connection recovered; the response completed.");
       schedulePoll();
     } catch (_refreshError) {
-      chat.messages = chat.messages.filter((message) => message !== optimisticAssistant);
-      chat.messages.push({ role: "assistant", content: error.message, error: true, provider: selectedProvider });
+      const current = state.chats.find((item) => item.id === chat.id) || chat;
+      current.messages = current.messages.filter((message) =>
+        message !== optimisticAssistant && message.id !== requestId);
+      if (!$("#prompt").value) $("#prompt").value = content;
+      resizePrompt();
       toast(error.message);
     }
   } finally {
@@ -525,9 +1095,14 @@ function applyServerState(initial) {
   const requestedProvider = activeChat()?.requested_provider;
   const requestedModel = activeChat()?.requested_model;
   Object.assign(state, initial);
-  state.csrfToken = initial.csrf_token || state.csrfToken;
-  state.activeId = state.chats.some((chat) => chat.id === activeId)
-    ? activeId : state.chats[0]?.id || null;
+  state.windowId = initial.window_id || state.windowId;
+  state.windowProvider = initial.window_provider || state.windowProvider;
+  const chats = visibleChats();
+  state.activeId = chats.some((chat) => chat.id === activeId)
+    ? activeId : chats[0]?.id || null;
+  try {
+    if (state.activeId) sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId);
+  } catch (_error) {}
   state.draftCwd = draftCwd || activeChat()?.cwd || state.defaultCwd;
   if (state.activeId === activeId && requestedProvider && !activeRunning()) {
     activeChat().requested_provider = requestedProvider;
@@ -536,11 +1111,15 @@ function applyServerState(initial) {
 }
 
 async function refreshState() {
+  const sequence = ++stateRequestSequence;
   const conversation = $("#conversation");
   const previousScrollTop = conversation.scrollTop;
   const followOutput = conversation.scrollHeight - conversation.scrollTop
     - conversation.clientHeight < 120;
-  applyServerState(await api("/api/state"));
+  const initial = await api("/api/state");
+  if (sequence < stateAppliedSequence) return;
+  stateAppliedSequence = sequence;
+  applyServerState(initial);
   render();
   conversation.scrollTop = followOutput ? conversation.scrollHeight : previousScrollTop;
 }
@@ -549,7 +1128,29 @@ function schedulePoll() {
   if (!anyRunning() || pollTimer !== null) return;
   pollTimer = setTimeout(async () => {
     pollTimer = null;
-    try { await refreshState(); }
+    const wasRunning = anyRunning();
+    try {
+      const runningIds = state.chats.filter((chat) => pendingMessage(chat)).map((chat) => chat.id);
+      const updates = await Promise.all(runningIds.map((chatId) =>
+        api(`/api/chats/${encodeURIComponent(chatId)}`)));
+      const completed = updates.filter((chat) => !pendingMessage(chat));
+      const changedActive = updates.some((chat) => chat.id === state.activeId);
+      const byId = new Map(updates.map((chat) => [chat.id, chat]));
+      state.chats = state.chats.map((chat) => byId.get(chat.id) || chat)
+        .sort((a, b) => b.updated_at - a.updated_at);
+      if (changedActive) render();
+      else renderChats();
+      // Refresh the provider card on the pending -> completed edge. This is
+      // especially important for Qwen, whose auto-started endpoint may stop
+      // again immediately after a turn completes.
+      if (wasRunning && completed.length) {
+        completed.forEach((chat) => notifyCompletion(
+          `${providerLabel(chat.requested_provider || chat.provider || state.windowProvider)} finished ${chat.title || "a work session"}.`,
+          `pilferedparrot-work-${chat.id}`,
+        ));
+        await refreshBudgets(false);
+      }
+    }
     catch (error) { toast(error.message); }
     finally { if (anyRunning()) schedulePoll(); }
   }, 750);
@@ -570,25 +1171,41 @@ async function cancelMessage() {
   }
 }
 
-async function runTerminalCommand(button) {
+function runTerminalCommand(button) {
   const chat = activeChat();
   if (!chat) return;
   const command = button.closest(".code-block")?.querySelector("code")?.textContent || "";
-  if (!confirm(`Run this command as your user in ${chat.cwd}?\n\n${command}`)) return;
-  button.disabled = true;
+  terminalTarget = {
+    button,
+    chatId: chat.id,
+    messageId: button.dataset.messageId,
+    blockIndex: Number(button.dataset.blockIndex),
+  };
+  $("#terminalCwd").textContent = chat.cwd;
+  $("#terminalCommand").textContent = command;
+  $("#terminalDialog").showModal();
+}
+
+async function confirmTerminalCommand() {
+  const target = terminalTarget;
+  if (!target) return;
+  target.button.disabled = true;
+  $("#confirmTerminal").disabled = true;
   try {
-    await api(`/api/chats/${encodeURIComponent(chat.id)}/terminal`, {
+    await api(`/api/chats/${encodeURIComponent(target.chatId)}/terminal`, {
       method: "POST",
       body: JSON.stringify({
-        message_id: button.dataset.messageId,
-        block_index: Number(button.dataset.blockIndex),
+        message_id: target.messageId,
+        block_index: target.blockIndex,
       }),
     });
+    $("#terminalDialog").close();
     toast("Opened command in a terminal.");
   } catch (error) {
     toast(error.message);
   } finally {
-    if (button.isConnected) button.disabled = false;
+    if (target.button.isConnected) target.button.disabled = false;
+    $("#confirmTerminal").disabled = false;
   }
 }
 
@@ -597,11 +1214,33 @@ async function init() {
     restorePaneWidths();
     const initial = await api("/api/state");
     Object.assign(state, initial);
-    state.csrfToken = initial.csrf_token || "";
-    await api("/api/window/open", { method: "POST", body: "{}" });
-    state.activeId = state.chats[0]?.id || null;
-    state.draftCwd = activeChat()?.cwd || state.defaultCwd;
-    if (!state.activeId) await createChat(initial.default_provider || "codex");
+    if (fragmentCwd) state.defaultCwd = fragmentCwd;
+    state.windowId = initial.window_id || state.windowId;
+    state.windowProvider = initial.window_provider || fragmentProvider
+      || initial.default_provider || "codex";
+    await api("/api/window/open", {
+      method: "POST", body: JSON.stringify({ document_id: documentId }),
+    });
+    state.initialized = true;
+    await refreshBrowserTheme(false).catch(() => {});
+    if (launchedFromApp) {
+      state.activeId = null;
+      state.draftCwd = fragmentCwd || state.defaultCwd;
+      if (fragmentPickProject) {
+        pendingLaunchModel = fragmentModel;
+        openProjectDialog(true);
+      } else {
+        await createChat(fragmentModel);
+      }
+    } else {
+      let savedActiveId = "";
+      try { savedActiveId = sessionStorage.getItem(ACTIVE_CHAT_SESSION_KEY) || ""; } catch (_error) {}
+      const chats = visibleChats();
+      state.activeId = chats.some((chat) => chat.id === savedActiveId)
+        ? savedActiveId : chats[0]?.id || null;
+      state.draftCwd = activeChat()?.cwd || state.defaultCwd;
+      if (!state.activeId) await createChat(fragmentModel);
+    }
     render();
     schedulePoll();
     await refreshBudgets(true);
@@ -612,105 +1251,418 @@ async function init() {
 }
 
 async function openChatWindow() {
-  const targetArea = (screen.availWidth * screen.availHeight) / 6;
-  const aspectRatio = 16 / 9;
-  // One sixth of a small desktop is narrower than Chat's full-layout
-  // breakpoint. Keep the original landscape target, but give a normal window
-  // enough room for both panes and the composer.
-  const maxWidth = Math.max(320, screen.availWidth - 56);
-  const maxHeight = Math.max(240, screen.availHeight - 84);
-  const width = Math.min(maxWidth, Math.max(720, Math.round(Math.sqrt(targetArea * aspectRatio))));
-  const height = Math.min(maxHeight, Math.max(480, Math.round(Math.sqrt(targetArea / aspectRatio))));
+  const width = CHAT_WINDOW_WIDTH;
+  const height = CHAT_WINDOW_HEIGHT;
   const left = Math.max(0, (Number(screen.availLeft) || 0) + screen.availWidth - width - 28);
   const top = Math.max(0, (Number(screen.availTop) || 0) + 28);
+  const model = $("#modelSelect").value || preferredModel(state.windowProvider);
   try {
     await api("/api/chat/window", {
-      method: "POST", body: JSON.stringify({ width, height, left, top }),
+      method: "POST", body: JSON.stringify({
+        provider: state.windowProvider, model: model,
+        cwd: state.draftCwd || activeChat()?.cwd || state.defaultCwd,
+        width, height, left, top,
+      }),
     });
   } catch (error) { toast(error.message); }
 }
 
+async function openProviderWindow(provider, model = "") {
+  const width = Math.max(900, Math.min(1280, (Number(screen.availWidth) || 1200) - 120));
+  const height = Math.max(650, Math.min(900, (Number(screen.availHeight) || 800) - 100));
+  const left = Math.max(0, (Number(screen.availLeft) || 0) + 54);
+  const top = Math.max(0, (Number(screen.availTop) || 0) + 42);
+  await api("/api/provider/window", {
+    method: "POST", body: JSON.stringify({
+      provider, model: model || null,
+      cwd: state.draftCwd || activeChat()?.cwd || state.defaultCwd,
+      width, height, left, top,
+    }),
+  });
+  toast(`Opened ${providerLabel(provider)} in another window.`);
+}
+
+function beginProviderDraft() {
+  const first = state.provider_templates?.[0];
+  state.providerDraft = first ? { template: first.id } : {};
+  renderProviderConnections();
+}
+
+async function submitProviderDraft() {
+  const draft = state.providerDraft || {};
+  const read = (name) => document.querySelector(`[data-provider-draft-${name}]`)?.value.trim() || "";
+  const template = document.querySelector("[data-provider-draft-template]")?.value || draft.template || "";
+  if (!template) throw new Error("Choose a provider template.");
+  await api("/api/providers", { method: "POST", body: JSON.stringify({
+    template, label: read("label"), model: read("model"),
+    base_url: read("base-url"), api_key_env: read("api-key-env"),
+  }) });
+  state.providerDraft = null;
+  await refreshState();
+  toast("Provider added. API secrets remain in your environment.");
+}
+
+async function removeProvider(provider) {
+  if (!window.confirm(`Remove ${providerLabel(provider)}? You can restore it from Add provider.`)) return;
+  await api("/api/providers/remove", { method: "POST", body: JSON.stringify({ provider }) });
+  await refreshState();
+  toast(`Removed ${providerLabel(provider)}.`);
+}
+
+async function launchProviderLogin(provider) {
+  const result = await api(`/api/providers/${provider}/login`, { method: "POST", body: "{}" });
+  state.authPending[provider] = true;
+  state.authConfirmation[provider] = Boolean(result.confirmation_code);
+  renderProviderConnections();
+  toast(result.launched === false
+    ? `${providerLabel(provider)} sign-in is already open.`
+    : `${providerLabel(provider)} sign-in opened in your default browser.`);
+  watchProviderLogin(provider);
+}
+
+async function requestProviderLogin(provider) {
+  state.authPending[provider] = true;
+  state.authCodes[provider] = "";
+  renderProviderConnections();
+  try {
+    await launchProviderLogin(provider);
+  } catch (error) {
+    delete state.authPending[provider];
+    delete state.authConfirmation[provider];
+    delete state.authCodes[provider];
+    renderProviderConnections();
+    throw error;
+  }
+}
+
+async function submitProviderAuthCode(provider) {
+  const code = (state.authCodes[provider] || "").trim();
+  await api(`/api/providers/${provider}/code`, {
+    method: "POST", body: JSON.stringify({ code }),
+  });
+  state.authCodes[provider] = "";
+  renderProviderConnections();
+  toast(`${providerLabel(provider)} confirmation sent. Finishing sign-in…`);
+}
+
+async function watchProviderLogin(provider, attempt = 0) {
+  if (!state.authPending[provider]) return;
+  if (attempt >= 200) {
+    delete state.authPending[provider];
+    delete state.authConfirmation[provider];
+    delete state.authCodes[provider];
+    renderProviderConnections();
+    toast(`${providerLabel(provider)} sign-in was not detected. Select Sign in to try again.`);
+    return;
+  }
+  await new Promise((resolve) => setTimeout(resolve, 1500));
+  await refreshBudgets(false);
+  if (state.budgets[provider]?.auth_status === "signed_in") {
+    delete state.authPending[provider];
+    delete state.authConfirmation[provider];
+    delete state.authCodes[provider];
+    renderProviderConnections();
+    toast(`${providerLabel(provider)} is ready. Choose a model, then select Use ${providerLabel(provider)}.`);
+    return;
+  }
+  watchProviderLogin(provider, attempt + 1);
+}
+
+function requestProviderLogout(provider) {
+  providerLogoutTarget = provider;
+  $("#providerLogoutNote").textContent = `This signs you out of ${providerLabel(provider)} in every PilferedParrot window that uses it. Other providers stay signed in.`;
+  $("#providerLogoutDialog").showModal();
+}
+
+async function confirmProviderLogout() {
+  const provider = providerLogoutTarget;
+  if (!provider) return;
+  $("#confirmProviderLogout").disabled = true;
+  try {
+    await api(`/api/providers/${provider}/logout`, { method: "POST", body: "{}" });
+    $("#providerLogoutDialog").close();
+    await refreshBudgets(false);
+    toast(`Signed out of ${providerLabel(provider)}.`);
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    $("#confirmProviderLogout").disabled = false;
+  }
+}
+
+async function openChromeThemeGallery() {
+  const button = $("#chromeTheme");
+  button.disabled = true;
+  try {
+    await api("/api/browser/theme", { method: "POST", body: "{}" });
+    toast("Choose Add to Chrome for this private PilferedParrot window, then return here.");
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 $("#composer").addEventListener("submit", sendMessage);
 $("#prompt").addEventListener("input", resizePrompt);
+$("#prompt").addEventListener("click", (event) => {
+  if (clickedAfterPromptSuggestion(event)) acceptPromptSuggestion();
+});
 $("#prompt").addEventListener("keydown", (event) => {
+  if (event.isComposing) return;
+  if (event.key === "ArrowRight" && acceptPromptSuggestion()) {
+    event.preventDefault();
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     $("#composer").requestSubmit();
   }
 });
-$("#newWorkSession").addEventListener("click", () => createChat().catch((error) => toast(error.message)));
+$("#newWorkSession").addEventListener("click", () => createChat(
+  $("#modelSelect").value || preferredModel(state.windowProvider),
+)
+  .then(choosePromptSuggestion)
+  .catch((error) => toast(error.message)));
+$("#providerWindows").addEventListener("click", () => {
+  renderProviderConnections();
+  $("#providerDialog").showModal();
+});
+$("#refreshProviderDashboard").addEventListener("click", async () => {
+  const button = $("#refreshProviderDashboard");
+  button.disabled = true;
+  try { await refreshBudgets(true); }
+  finally { button.disabled = false; }
+});
 $("#cancelButton").addEventListener("click", cancelMessage);
 $("#openChat").addEventListener("click", openChatWindow);
+$("#notificationPreferences").addEventListener("click", () => {
+  manageNotificationPermission().catch((error) => toast(error.message, "error"));
+});
+$("#chromeTheme").addEventListener("click", openChromeThemeGallery);
 setupPaneResizer("#sidebarResizer", "sidebar");
 $("#messages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-run-command]");
   if (button) runTerminalCommand(button);
 });
-$("#providerSelect").addEventListener("change", () => {
+$("#modelSelect").addEventListener("change", async () => {
   const chat = activeChat();
-  const provider = $("#providerSelect").value;
-  if (chat) {
-    chat.requested_provider = provider;
-    chat.requested_model = null;
-  }
-  renderModelSelect(provider, "");
+  const model = $("#modelSelect").value;
+  if (chat) chat.requested_model = model || null;
+  if (!model) return;
+  try {
+    state.preferences = await api("/api/preferences/provider", {
+      method: "POST", body: JSON.stringify({ provider: state.windowProvider, model }),
+    });
+  } catch (error) { toast(error.message); }
 });
-$("#modelSelect").addEventListener("change", () => {
-  const chat = activeChat();
-  if (chat) chat.requested_model = $("#modelSelect").value || null;
+$("#modelSelect").addEventListener("pointerdown", (event) => {
+  pollProviderModels(state.windowProvider, event.currentTarget);
+});
+$("#modelSelect").addEventListener("keydown", (event) => {
+  if (["Enter", " ", "ArrowDown"].includes(event.key)) {
+    pollProviderModels(state.windowProvider, event.currentTarget);
+  }
 });
 $("#refreshBudgets").addEventListener("click", async () => {
-  $("#refreshBudgets").textContent = "…";
+  const button = $("#refreshBudgets");
+  button.classList.add("refreshing");
+  button.setAttribute("aria-busy", "true");
   try { await refreshBudgets(true); }
-  finally { $("#refreshBudgets").textContent = "↻"; }
+  finally {
+    button.classList.remove("refreshing");
+    button.removeAttribute("aria-busy");
+  }
+});
+function openProjectDialog(needsChoice) {
+  $("#projectNotice").hidden = !needsChoice;
+  $("#projectInput").value = needsChoice ? "" : state.draftCwd;
+  $("#projectDialog").showModal();
+}
+$("#browseProject").addEventListener("click", async () => {
+  const button = $("#browseProject");
+  button.disabled = true;
+  button.setAttribute("aria-busy", "true");
+  try {
+    const selected = await api("/api/project/folder", {
+      method: "POST",
+      body: JSON.stringify({
+        cwd: $("#projectInput").value.trim() || state.draftCwd || state.defaultCwd,
+      }),
+    });
+    if (selected.path) {
+      $("#projectInput").value = selected.path;
+      $("#projectInput").focus();
+    }
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
 });
 $("#projectButton").addEventListener("click", () => {
   if (activeChat()?.messages?.length) {
     toast("Start a new work session to change projects.");
     return;
   }
-  $("#projectInput").value = state.draftCwd;
-  $("#projectDialog").showModal();
+  openProjectDialog(pendingLaunchModel !== null);
 });
-$("#projectForm").addEventListener("submit", (event) => {
-  if (event.submitter?.value === "cancel") return;
+$("#projectForm").addEventListener("submit", async (event) => {
+  if (projectSubmitPending) {
+    event.preventDefault();
+    return;
+  }
+  if (event.submitter?.value === "cancel") {
+    if (pendingLaunchModel !== null) toast("Choose a project folder to start working here.");
+    return;
+  }
   event.preventDefault();
-  state.draftCwd = $("#projectInput").value.trim() || state.defaultCwd;
+  const chosen = $("#projectInput").value.trim();
+  // A launch that is still waiting for a folder has no default worth falling
+  // back to: the inherited one is precisely what this provider refused.
+  if (pendingLaunchModel !== null && !chosen) {
+    toast("Enter a project folder for this provider.");
+    return;
+  }
+  state.draftCwd = chosen || state.defaultCwd;
+  if (pendingLaunchModel !== null) {
+    const model = pendingLaunchModel;
+    const saveButton = $("#saveProject");
+    projectSubmitPending = true;
+    saveButton.disabled = true;
+    try {
+      await createChat(model);
+      pendingLaunchModel = null;
+    } catch (error) {
+      toast(error.message);
+      return;
+    } finally {
+      projectSubmitPending = false;
+      saveButton.disabled = false;
+    }
+  }
   $("#projectDialog").close();
   renderHeader();
 });
-$("#openSidebar").addEventListener("click", () => $("#sidebar").classList.add("open"));
-$("#closeSidebar").addEventListener("click", () => $("#sidebar").classList.remove("open"));
+$("#terminalForm").addEventListener("submit", (event) => {
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  confirmTerminalCommand();
+});
+$("#terminalDialog").addEventListener("close", () => { terminalTarget = null; });
+$("#providerConnectionList").addEventListener("click", async (event) => {
+  const windowButton = event.target.closest("[data-provider-window]");
+  const login = event.target.closest("[data-provider-login]");
+  const code = event.target.closest("[data-provider-code]");
+  const logout = event.target.closest("[data-provider-logout]");
+  const remove = event.target.closest("[data-provider-remove]");
+  const draftSubmit = event.target.closest("[data-provider-draft-submit]");
+  const draftCancel = event.target.closest("[data-provider-draft-cancel]");
+  try {
+    if (windowButton) {
+      const provider = windowButton.dataset.providerWindow;
+      await openProviderWindow(provider, providerModelChoice(provider));
+      $("#providerDialog").close();
+    } else if (login) {
+      await requestProviderLogin(login.dataset.providerLogin);
+    } else if (code) {
+      await submitProviderAuthCode(code.dataset.providerCode);
+    } else if (logout) {
+      requestProviderLogout(logout.dataset.providerLogout);
+    } else if (remove) {
+      await removeProvider(remove.dataset.providerRemove);
+    } else if (draftSubmit) {
+      draftSubmit.disabled = true;
+      await submitProviderDraft();
+    } else if (draftCancel) {
+      state.providerDraft = null;
+      renderProviderConnections();
+    }
+  } catch (error) {
+    if (draftSubmit) draftSubmit.disabled = false;
+    toast(error.message);
+  }
+});
+$("#providerConnectionList").addEventListener("input", (event) => {
+  const input = event.target.closest("[data-provider-auth-code]");
+  if (!input) return;
+  const provider = input.dataset.providerAuthCode;
+  state.authCodes[provider] = input.value;
+  const submit = $("#providerConnectionList").querySelector(`[data-provider-code="${provider}"]`);
+  if (submit) submit.disabled = !input.value.trim();
+});
+$("#providerConnectionList").addEventListener("change", async (event) => {
+  const select = event.target.closest("[data-provider-model]");
+  if (select) {
+    const provider = select.dataset.providerModel;
+    state.providerModels[provider] = select.value;
+    if (select.value) {
+      try {
+        state.preferences = await api("/api/preferences/provider", {
+          method: "POST", body: JSON.stringify({ provider, model: select.value }),
+        });
+      } catch (error) { toast(error.message); }
+    }
+  }
+});
+$("#providerConnectionList").addEventListener("pointerdown", (event) => {
+  const select = event.target.closest("[data-provider-model]");
+  if (select) pollProviderModels(select.dataset.providerModel, select);
+});
+$("#providerConnectionList").addEventListener("keydown", (event) => {
+  const select = event.target.closest("[data-provider-model]");
+  if (select && ["Enter", " ", "ArrowDown"].includes(event.key)) {
+    pollProviderModels(select.dataset.providerModel, select);
+  }
+});
+$("#addProvider").addEventListener("click", beginProviderDraft);
+$("#providerConnectionList").addEventListener("change", (event) => {
+  const template = event.target.closest("[data-provider-draft-template]");
+  if (template) {
+    state.providerDraft = { template: template.value };
+    renderProviderConnections();
+  }
+});
+$("#providerLogoutForm").addEventListener("submit", (event) => {
+  if (event.submitter?.value === "cancel") return;
+  event.preventDefault();
+  confirmProviderLogout();
+});
+$("#providerLogoutDialog").addEventListener("close", () => { providerLogoutTarget = null; });
+function setSidebarOpen(open) {
+  $("#sidebar").classList.toggle("open", open);
+  $("#openSidebar").setAttribute("aria-expanded", String(open));
+  $(".main").inert = open && matchMedia("(max-width: 760px)").matches;
+  if (open) $("#closeSidebar").focus();
+}
+$("#openSidebar").addEventListener("click", () => setSidebarOpen(true));
+$("#closeSidebar").addEventListener("click", () => setSidebarOpen(false));
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && $("#sidebar").classList.contains("open")) {
+    setSidebarOpen(false);
+    $("#openSidebar").focus();
+  }
+});
+window.addEventListener("focus", () => {
+  setTimeout(() => refreshBrowserTheme(true).catch(() => {}), 250);
+  setTimeout(() => refreshBrowserTheme(true).catch(() => {}), 1200);
+  setTimeout(() => refreshBudgets(false), 400);
+});
 document.addEventListener("visibilitychange", () => {
   if (!document.hidden) { refreshBudgets(false); scheduleBudgetPoll(); }
 });
 window.addEventListener("pagehide", () => {
-  if (!state.csrfToken) return;
+  if (!state.capability) return;
   fetch("/api/window/close", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      "X-PilferedParrot-CSRF": state.csrfToken,
+      "X-PilferedParrot-Capability": state.capability,
     },
-    body: "{}",
+    body: JSON.stringify({ document_id: documentId }),
     keepalive: true,
   }).catch(() => {});
 });
-document.querySelectorAll("[data-prompt]").forEach((button) => button.addEventListener("click", () => {
-  $("#prompt").value = button.dataset.prompt;
-  resizePrompt();
-  $("#prompt").focus();
-}));
-document.querySelectorAll("[data-provider-choice]").forEach((button) => button.addEventListener("click", () => {
-  const provider = button.dataset.providerChoice;
-  $("#providerSelect").value = provider;
-  const chat = activeChat();
-  if (chat) {
-    chat.requested_provider = provider;
-    chat.requested_model = null;
-  }
-  renderModelSelect(provider, "");
-  $("#prompt").focus();
-}));
-
+choosePromptSuggestion();
 init();
