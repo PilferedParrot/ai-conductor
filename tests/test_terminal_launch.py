@@ -1,3 +1,5 @@
+import os
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -15,6 +17,26 @@ def _app(directory):
 
 
 class TerminalCommandTests(unittest.TestCase):
+    def test_desktop_installer_quotes_repository_paths_with_spaces(self):
+        root = Path(__file__).parents[1]
+        with tempfile.TemporaryDirectory() as directory:
+            temporary = Path(directory)
+            environment = {
+                **os.environ,
+                "HOME": str(temporary / "home"),
+                "XDG_DATA_HOME": str(temporary / "data"),
+                "XDG_STATE_HOME": str(temporary / "state"),
+            }
+            (temporary / "home").mkdir()
+            subprocess.run(
+                [str(root / "bin" / "install-pilferedparrot-desktop")],
+                check=True, env=environment, capture_output=True, text=True,
+            )
+            desktop = (temporary / "data" / "applications" /
+                       "pilferedparrot.desktop").read_text()
+        self.assertIn(f'Exec="{root}/bin/pilferedparrot-gui"', desktop)
+        self.assertIn(f"TryExec={root}/bin/pilferedparrot-gui", desktop)
+
     def test_fenced_blocks_match_browser_command_indexing(self):
         self.assertEqual(
             _fenced_code_blocks("Text\n```bash\nsudo apt update\n```\n```\nnot a language\n```"),

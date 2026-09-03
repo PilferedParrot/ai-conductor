@@ -23,10 +23,16 @@ if [ -d "$OLD_STATE_DIR" ]; then
         echo "Kept non-migrated files in $OLD_STATE_DIR" >&2
 fi
 
+sed_replacement() {
+    printf '%s' "$1" | sed 's/[\\&|]/\\&/g'
+}
+repo_replacement=$(sed_replacement "$REPO_ROOT")
+home_replacement=$(sed_replacement "$HOME")
+icon_replacement=$(sed_replacement "$ICON_PATH")
 sed \
-    -e "s|@PREFIX@|$REPO_ROOT|g" \
-    -e "s|@HOME@|$HOME|g" \
-    -e "s|@ICON@|$ICON_PATH|g" \
+    -e "s|@PREFIX@|$repo_replacement|g" \
+    -e "s|@HOME@|$home_replacement|g" \
+    -e "s|@ICON@|$icon_replacement|g" \
     "$REPO_ROOT/packaging/pilferedparrot.desktop.in" \
     > "$APPLICATION_DIR/pilferedparrot.desktop"
 
