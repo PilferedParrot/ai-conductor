@@ -2,6 +2,7 @@
   "qwen": {
     "base_url": "http://127.0.0.1:8080/v1",
     "health_url": "http://127.0.0.1:8080/health",
+    "allow_remote_egress": false,
     "model": "qwen3-coder-next",
     "model_options": ["qwen3-coder-next"],
     "context_window_tokens": null,
@@ -9,7 +10,9 @@
     "auto_start": false,
     "start_command": [],
     "shell_network": false,
-    "allow_home_workspace": false
+    "allow_home_workspace": false,
+    "additional_dirs": [],
+    "default_workspace": null
   },
   "codex": {
     "sandbox": "workspace-write",
@@ -17,8 +20,69 @@
     "context_window_percent": 100,
     "additional_write_dirs": []
   },
+  "claude": {
+    "command": "claude",
+    "model": null,
+    "model_options": [
+      {
+        "value": "claude-fable-5-1",
+        "label": "Claude Fable 5.1",
+        "max_context_window": 200000
+      },
+      {
+        "value": "claude-fable-5",
+        "label": "Claude Fable 5",
+        "max_context_window": 200000
+      },
+      {
+        "value": "claude-opus-5",
+        "label": "Claude Opus 5",
+        "max_context_window": 200000
+      },
+      {
+        "value": "claude-opus-4-8",
+        "label": "Claude Opus 4.8",
+        "max_context_window": 200000
+      },
+      {
+        "value": "claude-sonnet-5",
+        "label": "Claude Sonnet 5",
+        "max_context_window": 200000
+      },
+      {
+        "value": "claude-sonnet-4-6",
+        "label": "Claude Sonnet 4.6",
+        "max_context_window": 200000
+      },
+      {
+        "value": "claude-haiku-4-5",
+        "label": "Claude Haiku 4.5",
+        "max_context_window": 200000
+      }
+    ],
+    "context_window_tokens": null,
+    "context_window_percent": 100,
+    "request_timeout_seconds": 1800
+  },
+  "gemini": {
+    "command": "gemini",
+    "model": "auto",
+    "model_options": [
+      {"value": "auto", "label": "Gemini Auto"},
+      {"value": "gemini-3-pro-preview", "label": "Gemini 3 Pro Preview"},
+      {"value": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
+      {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
+      {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
+      {"value": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"}
+    ],
+    "context_window_tokens": null,
+    "context_window_percent": 100,
+    "approval_mode": "auto_edit",
+    "request_timeout_seconds": 1800
+  },
   "web": {
     "default_provider": "codex",
+    "model_catalog_store": null,
     "chat_model": "gpt-5.6-terra",
     "chat_reasoning_effort": "low",
     "chat_context_warning_chars": 80000,

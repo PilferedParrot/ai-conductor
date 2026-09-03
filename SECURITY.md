@@ -7,7 +7,7 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.3.x | Yes |
+| 0.4.x | Yes |
 
 ## Reporting a vulnerability
 
@@ -31,13 +31,21 @@ metadata are stored locally with owner-only file permissions, but the selected p
 Qwen endpoint receives the prompt and any tool output needed for the task. Users are responsible
 for the data-handling terms and configuration of those providers.
 
-Qwen file tools resolve paths inside the selected workspace. Qwen shell tools require Bubblewrap;
+Local and OpenAI-compatible provider file tools resolve paths inside the selected workspace. Their shell tools require Bubblewrap;
 the workspace and ephemeral `/tmp` are writable, the operator's home outside the workspace is
 hidden, inherited environment variables are reduced to a small allowlist, and other mounted host
 paths are read-only. Network access is disabled unless `qwen.shell_network` is explicitly enabled.
-Selecting the operator's entire home directory as the Qwen workspace is rejected unless
-`qwen.allow_home_workspace` is explicitly enabled, because that selection exposes credentials and
-documents that the normal home mask protects.
+Selecting the operator's entire home directory for one of these providers is rejected unless its
+`allow_home_workspace` setting is explicitly enabled, because that selection exposes credentials
+and documents that the normal home mask protects. A parent of home is always rejected because it
+would grant still broader access. Additional workspace roots may be listed in the
+provider's `additional_dirs`; they are mounted alongside the workspace, are configuration-only so a
+prompt cannot grant itself new roots, and may not name the home directory or one of its parents even
+when `allow_home_workspace` is set, so an extra root cannot become an indirect home mask bypass. Custom provider cards store only an API-key
+environment-variable name; the key itself remains in the process environment and is never returned
+to browser state or written to the provider-card store. A keyed non-loopback endpoint must use HTTPS,
+and provider redirects cannot leave its configured origin or downgrade the connection. Remote endpoints receive the prompt and
+tool results, so adding a card is also an explicit data-egress decision.
 This limits accidents but is not a hardened boundary against hostile kernel,
 Bubblewrap, compiler, or project inputs. Use a disposable VM or container for untrusted code.
 
@@ -46,16 +54,28 @@ remain an independent security boundary. The selected project is writable in `wo
 mode. Operators may configure narrowly scoped `codex.additional_write_dirs`; PilferedParrot validates
 them and passes them as Codex `--add-dir` roots on new and resumed turns. Every such root expands
 the model's write authority, so prefer project directories and do not grant the whole home folder
-without deliberately accepting that scope. PilferedParrot has no Claude Code integration or automatic
-provider router, delegator, or second-model review loop.
+without deliberately accepting that scope.
+
+Claude Code executes through its own CLI and retains its authentication, permissions, settings,
+and network behavior. PilferedParrot does not copy credentials into browser state. Provider sign-in
+runs the official CLI flow in the background, automatically confirms its browser handoff when
+needed, and lets the CLI open the system's default browser. Provider sign-out clears that CLI's
+stored credentials and is therefore confirmed in the browser first. CLI credentials are shared by all PilferedParrot windows
+for the same OS user. There is no automatic provider router, delegator, or second-model review loop.
+
+Gemini likewise executes through its local CLI in headless mode and keeps Google's authentication,
+tool policy, and project-scoped session files under Gemini's control. PilferedParrot does not copy
+Gemini credentials into its browser state or chat store.
 
 The optional Chat pane is a separate, read-only Codex session. User messages go to that session
 directly; PilferedParrot does not inject technical messages or conversation metadata. Chat cannot
 switch, interrupt, rewrite, or relay technical requests, widen
 filesystem permissions, or bypass the technical provider's normal sandbox.
 
-All mutating browser requests require a per-server CSRF token plus loopback peer, Host, and Origin
-checks. Keep `web.host` on a loopback address; remote exposure is not supported.
+All mutating browser requests require a scoped per-window capability plus loopback peer, exact Host,
+and Origin checks. Capabilities travel in URL fragments, are omitted from server state, and are
+revoked when isolated windows exit. Keep `web.host` on a loopback address; remote exposure is not
+supported.
 
 Completed assistant responses may offer a terminal button for single-line fenced commands. A click
 first shows the exact command and project folder for confirmation, then launches the stored command
