@@ -1,0 +1,152 @@
+"""Focused HTTP transport and server-lifecycle coverage."""
+
+from __future__ import annotations
+
+import io
+import json
+import tempfile
+import unittest
+from http import HTTPStatus
+from pathlib import Path
+from unittest.mock import MagicMock
+
+from pilferedparrot import web_server
+
+
+class FakeApp:
+    csrf_token = "csrf-token"
+
+    def state(self):
+        return {"chats": [], "csrf_token": self.csrf_token}
+
+    def budgets(self):
+        return {}
+
+
+def bare_handler(handler_type, *, path="/api/state"):
+    handler = object.__new__(handler_type)
+    handler.path = path
+    handler.server = MagicMock()
+    handler.client_address = ("127.0.0.1", 43210)
+    handler.headers = {"Host": "127.0.0.1:8765"}
+    return handler
+
+
+class WebServerHTTPTests(unittest.TestCase):
+    def test_state_is_serialized_with_transport_headers(self):
+        handler = bare_handler(web_server.make_handler(
+            FakeApp(), asset_version="assets", runtime_version="runtime", version="test",
+        ))
+        statuses = []
+        headers = {}
+        handler.send_response = statuses.append
+        handler.send_header = headers.__setitem__
+        handler.end_headers = lambda: None
+        handler.wfile = io.BytesIO()
+
+        handler.do_GET()
+
+        self.assertEqual(statuses, [HTTPStatus.OK])
+        self.assertEqual(json.loads(handler.wfile.getvalue())["chats"], [])
+        self.assertEqual(headers["Content-Type"], "application/json; charset=utf-8")
+        self.assertEqual(headers["X-PilferedParrot-Assets"], "assets")
+        self.assertEqual(headers["X-PilferedParrot-Runtime"], "runtime")
+        self.assertEqual(handler.server_version, "PilferedParrot/test")
+
+    def test_assets_are_snapshotted_with_security_headers(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "index.html").write_bytes(b"first")
+            handler_type = web_server.make_handler(FakeApp(), asset_root=root)
+            (root / "index.html").write_bytes(b"second")
+            handler = bare_handler(handler_type, path="/")
+            headers = {}
+            handler.send_response = MagicMock()
+            handler.send_header = headers.__setitem__
+            handler.end_headers = lambda: None
+            handler.wfile = io.BytesIO()
+            handler.do_GET()
+
+        self.assertEqual(handler.wfile.getvalue(), b"first")
+        self.assertEqual(headers["Cache-Control"], "no-store")
+        self.assertEqual(headers["X-Frame-Options"], "DENY")
+        self.assertIn("frame-ancestors 'none'", headers["Content-Security-Policy"])
+
+    def test_api_rejects_a_non_loopback_host(self):
+        handler = bare_handler(web_server.make_handler(FakeApp()))
+        handler.headers["Host"] = "example.com"
+        handler._json = MagicMock()
+        handler.do_GET()
+        handler._json.assert_called_once_with(
+            {"error": "local API authorization failed"}, HTTPStatus.FORBIDDEN,
+        )
+
+    def test_json_parser_requires_an_object_and_bounded_length(self):
+        handler = bare_handler(web_server.make_handler(FakeApp()))
+        handler.rfile = io.BytesIO(b"[]")
+        handler.headers.update({"Content-Type": "application/json", "Content-Length": "2"})
+        with self.assertRaisesRegex(ValueError, "object"):
+            handler._read_json()
+        handler.headers["Content-Length"] = "1000001"
+        with self.assertRaisesRegex(ValueError, "request size"):
+            handler._read_json()
+
+    def test_reload_cancels_the_close_grace_timer(self):
+        timer = MagicMock()
+        timer_factory = MagicMock(return_value=timer)
+        handler = bare_handler(web_server.make_handler(
+            FakeApp(), timer_factory=timer_factory,
+        ))
+        handler._control_allowed = lambda: True
+        handler._read_json = lambda: {}
+        handler._json = MagicMock()
+        handler.path = "/api/window/close"
+        handler.do_POST()
+        handler.path = "/api/window/open"
+        handler.do_POST()
+        timer_factory.assert_called_once_with(2, handler.server.shutdown)
+        timer.start.assert_called_once_with()
+        timer.cancel.assert_called_once_with()
+
+
+class WebServerLifecycleTests(unittest.TestCase):
+    def test_status_probe_distinguishes_compatible_and_foreign_servers(self):
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.headers = {"Server": "PilferedParrot/test"}
+        response.read.return_value = json.dumps({
+            "chats": [], "csrf_token": "token", "api_generation": 7,
+            "asset_version": "assets", "runtime_version": "runtime",
+        }).encode()
+        opener = MagicMock(return_value=response)
+        self.assertEqual(web_server.pilferedparrot_status(
+            "http://127.0.0.1:8765", opener=opener, api_generation=7,
+            asset_version="assets", runtime_version="runtime",
+        ), "compatible")
+        response.headers = {"Server": "SomethingElse/1"}
+        self.assertEqual(web_server.pilferedparrot_status(
+            "http://127.0.0.1:8765", opener=opener,
+        ), "other")
+
+    def test_serve_always_shuts_down_and_closes_the_listener(self):
+        config = {"web": {"host": "127.0.0.1", "port": 8765, "open_browser": False}}
+        app = MagicMock(csrf_token="token")
+        app.recover_interrupted.return_value = 0
+        server = MagicMock()
+        server.serve_forever.side_effect = KeyboardInterrupt
+        status = MagicMock(return_value="unavailable")
+
+        result = web_server.serve(
+            config, Path("/tmp"), open_browser=False,
+            create_app=MagicMock(return_value=app), make_handler=MagicMock(return_value=object),
+            read_capability=MagicMock(), browser_url=MagicMock(), browser_open=MagicMock(),
+            status=status, terminate=MagicMock(), http_server=MagicMock(return_value=server),
+        )
+
+        self.assertEqual(result, 0)
+        app.shutdown.assert_called_once_with()
+        server.server_close.assert_called_once_with()
+
+
+if __name__ == "__main__":
+    unittest.main()

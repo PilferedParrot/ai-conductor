@@ -1,27 +1,20 @@
 from __future__ import annotations
 
 import argparse
-import errno
-import hashlib
-import hmac
-import ipaddress
 import json
 import os
 import re
 import secrets
 import shutil
 import subprocess
-import tempfile
 import threading
 import time
 import webbrowser
 from copy import deepcopy
-from http import HTTPStatus
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.request import urlopen
 
 from . import __version__
 from .budgets import collect_budgets
@@ -40,24 +33,37 @@ from .web_native import (
     notify_window_closed as native_notify_window_closed,
     open_browser as open_native_browser,
 )
+from . import web_server as _server
 
 
-ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
-RUNTIME_ROOT = Path(__file__).resolve().parent
-ASSET_NAMES = (
-    "index.html", "chat.html", "app.css", "app.js", "chat.js", "icon.svg",
-    "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png",
-)
+# Compatibility aliases retain the historical web.py import surface.
+ASSET_ROOT = _server.ASSET_ROOT
+RUNTIME_ROOT = _server.RUNTIME_ROOT
+ASSET_NAMES = _server.ASSET_NAMES
 CODE_BLOCK_LANGUAGES = frozenset({
     "bash", "console", "fish", "powershell", "shell", "sh", "terminal", "zsh",
 })
 ABSOLUTE_PATH = re.compile(r"(?<![\w.])(/[^\s`'\"<>|]+)")
-API_GENERATION = 10
+API_GENERATION = _server.API_GENERATION
 CHAT_MODEL_OPTIONS = ("gpt-5.6-terra", "gpt-5.6-luna")
 WRITE_SCOPE_INTENT = re.compile(
     r"\b(?:write access|writable|work(?:ing)?\s+(?:on|in)|implement|build|modify|edit|fix|create)\b",
     re.IGNORECASE,
 )
+
+
+def _asset_fingerprint(root: Path) -> str:
+    return _server._asset_fingerprint(root)
+
+
+ASSET_VERSION = _server.ASSET_VERSION
+
+
+def _runtime_fingerprint(root: Path) -> str:
+    return _server._runtime_fingerprint(root)
+
+
+RUNTIME_VERSION = _server.RUNTIME_VERSION
 
 
 def _estimated_tokens(characters: int) -> int:
@@ -101,41 +107,6 @@ def _context_percent(value: Any) -> int:
     return percent
 
 
-def _asset_fingerprint(root: Path) -> str:
-    """Identify the exact frontend bundle snapshotted by a server process."""
-    digest = hashlib.sha256()
-    for name in ASSET_NAMES:
-        digest.update(name.encode("utf-8") + b"\0")
-        try:
-            content = (root / name).read_bytes()
-        except OSError:
-            digest.update(b"missing\0")
-            continue
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
-    return digest.hexdigest()[:16]
-
-
-ASSET_VERSION = _asset_fingerprint(ASSET_ROOT)
-
-
-def _runtime_fingerprint(root: Path) -> str:
-    """Identify the Python runtime loaded by a newly launched process."""
-    digest = hashlib.sha256()
-    for path in sorted(root.rglob("*.py")):
-        relative = path.relative_to(root).as_posix()
-        digest.update(relative.encode("utf-8") + b"\0")
-        try:
-            content = path.read_bytes()
-        except OSError:
-            digest.update(b"missing\0")
-            continue
-        digest.update(len(content).to_bytes(8, "big"))
-        digest.update(content)
-    return digest.hexdigest()[:16]
-
-
-RUNTIME_VERSION = _runtime_fingerprint(RUNTIME_ROOT)
 LEGACY_REPOSITORY_NAME = "ai-conductor"
 RENAMED_REPOSITORY_NAME = "Pilfered Parrot"
 
@@ -260,48 +231,18 @@ def _terminal_argv(command: str, cwd: Path) -> list[str]:
 
 
 def _loopback_host(value: str) -> bool:
-    if value == "localhost":
-        return True
-    try:
-        return ipaddress.ip_address(value).is_loopback
-    except ValueError:
-        return False
+    return _server.loopback_host(value)
 
 
 def _pilferedparrot_status(url: str) -> str:
-    """Classify the listener without trusting an arbitrary service on the port."""
-    try:
-        with urlopen(f"{url}/api/state", timeout=1) as response:
-            payload = json.load(response)
-            server = response.headers.get("Server", "")
-        if not (
-            server.startswith(("PilferedParrot/", "ParrotRelay/", "AIConductor/"))
-            and isinstance(payload, dict)
-            and isinstance(payload.get("chats"), list)
-            and isinstance(payload.get("csrf_token"), str)
-        ):
-            return "other"
-        return "compatible" if (
-            payload.get("api_generation") == API_GENERATION
-            and payload.get("asset_version") == ASSET_VERSION
-            and payload.get("runtime_version") == RUNTIME_VERSION
-        ) else "stale"
-    except (OSError, ValueError, json.JSONDecodeError):
-        return "unavailable"
+    return _server.pilferedparrot_status(
+        url, opener=urlopen, api_generation=API_GENERATION,
+        asset_version=ASSET_VERSION, runtime_version=RUNTIME_VERSION,
+    )
 
 
 def _pilferedparrot_csrf_token(url: str) -> str | None:
-    """Read the instance-specific control token from a validated local server."""
-    try:
-        with urlopen(f"{url}/api/state", timeout=1) as response:
-            payload = json.load(response)
-            server = response.headers.get("Server", "")
-        token = payload.get("csrf_token") if isinstance(payload, dict) else None
-        if not server.startswith("PilferedParrot/") or not isinstance(token, str) or not token:
-            return None
-        return token
-    except (OSError, ValueError, json.JSONDecodeError):
-        return None
+    return _server.pilferedparrot_csrf_token(url, opener=urlopen)
 
 
 def _browser_url(url: str, csrf_token: str) -> str:
@@ -318,32 +259,14 @@ def _notify_window_closed(browser_url: str) -> bool:
 
 
 def _pilferedparrot_is_running(url: str) -> bool:
-    # Kept as a small compatibility wrapper for callers and older integrations.
     return _pilferedparrot_status(url) in {"compatible", "stale"}
 
 
 def _terminate_stale_pilferedparrot(url: str, port: int) -> None:
-    """Stop only the validated PilferedParrot listener occupying this TCP port."""
-    fuser = shutil.which("fuser")
-    if fuser is None:
-        raise RuntimeError("cannot replace stale PilferedParrot because fuser is unavailable")
-    subprocess.run(
-        [fuser, "-k", "-INT", f"{port}/tcp"],
-        check=False,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
+    _server.terminate_stale_pilferedparrot(
+        url, port, status=_pilferedparrot_status, which=shutil.which,
+        runner=subprocess.run, monotonic=time.monotonic, sleeper=time.sleep,
     )
-    # PilferedParrot's graceful shutdown gives active provider runs up to three
-    # seconds to observe cancellation and reap their subprocesses.
-    deadline = time.monotonic() + 5
-    while time.monotonic() < deadline:
-        status = _pilferedparrot_status(url)
-        if status == "unavailable":
-            return
-        if status == "other":
-            raise RuntimeError(f"another service took over port {port} during restart")
-        time.sleep(0.05)
-    raise RuntimeError(f"stale PilferedParrot did not release port {port}")
 
 
 class ChatStore(PersistentChatStore):
@@ -722,290 +645,24 @@ class PilferedParrotApp:
         self.native.shutdown(deadline=deadline)
 
 
-def make_handler(app: PilferedParrotApp) -> type[BaseHTTPRequestHandler]:
-    # Keep the frontend and API on the same generation. During development or
-    # an in-place update, rereading assets from disk would let an old process
-    # serve new JavaScript that calls routes the process does not have yet.
-    asset_cache: dict[str, bytes] = {}
-    window_close_lock = threading.Lock()
-    window_close_timer: threading.Timer | None = None
-
-    def cancel_window_close() -> None:
-        nonlocal window_close_timer
-        with window_close_lock:
-            if window_close_timer is not None:
-                window_close_timer.cancel()
-                window_close_timer = None
-
-    def schedule_window_close(server: ThreadingHTTPServer) -> None:
-        nonlocal window_close_timer
-        with window_close_lock:
-            if window_close_timer is not None:
-                window_close_timer.cancel()
-            # A reload closes and immediately reopens the document. Give that
-            # new document time to cancel shutdown while still making a real
-            # window close reliably release the server.
-            window_close_timer = threading.Timer(2, server.shutdown)
-            window_close_timer.name = "pilferedparrot-window-close-grace"
-            window_close_timer.daemon = True
-            window_close_timer.start()
-    for asset_name in ASSET_NAMES:
-        try:
-            asset_cache[asset_name] = (ASSET_ROOT / asset_name).read_bytes()
-        except OSError:
-            pass
-
-    class Handler(BaseHTTPRequestHandler):
-        server_version = f"PilferedParrot/{__version__}"
-
-        def log_message(self, fmt: str, *args: Any) -> None:
-            print(f"[web] {self.address_string()} {fmt % args}")
-
-        def _json(self, payload: Any, status: HTTPStatus = HTTPStatus.OK) -> None:
-            body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-PilferedParrot-Assets", ASSET_VERSION)
-            self.send_header("X-PilferedParrot-Runtime", RUNTIME_VERSION)
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.end_headers()
-            try:
-                self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-
-        def _read_json(self) -> dict[str, Any]:
-            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
-            if content_type != "application/json":
-                raise ValueError("Content-Type must be application/json")
-            try:
-                length = int(self.headers.get("Content-Length", "0"))
-            except ValueError as error:
-                raise ValueError("invalid Content-Length") from error
-            if length < 0 or length > 1_000_000:
-                raise ValueError("invalid request size")
-            data = json.loads(self.rfile.read(length) or b"{}")
-            if not isinstance(data, dict):
-                raise ValueError("request body must be an object")
-            return data
-
-        def _local_request_allowed(self) -> bool:
-            try:
-                peer_is_local = ipaddress.ip_address(self.client_address[0]).is_loopback
-                host = urlparse(f"//{self.headers.get('Host', '')}").hostname
-                host_is_local = host is not None and _loopback_host(host)
-            except ValueError:
-                return False
-            return peer_is_local and host_is_local
-
-        def _control_allowed(self) -> bool:
-            origin = self.headers.get("Origin")
-            origin_is_local = True
-            if origin:
-                parsed = urlparse(origin)
-                origin_is_local = (
-                    parsed.scheme == "http" and parsed.hostname is not None
-                    and _loopback_host(parsed.hostname)
-                )
-            supplied = self.headers.get(
-                "X-PilferedParrot-CSRF",
-                self.headers.get("X-Parrot-Relay-CSRF", self.headers.get("X-Conductor-CSRF", "")),
-            )
-            return (
-                self._local_request_allowed() and origin_is_local
-                and hmac.compare_digest(supplied, app.csrf_token)
-            )
-
-        def _asset(self, name: str, content_type: str) -> None:
-            body = asset_cache.get(name)
-            if body is None:
-                self.send_error(HTTPStatus.NOT_FOUND)
-                return
-            self.send_response(HTTPStatus.OK)
-            self.send_header("Content-Type", content_type)
-            self.send_header("Content-Length", str(len(body)))
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-PilferedParrot-Assets", ASSET_VERSION)
-            self.send_header("X-PilferedParrot-Runtime", RUNTIME_VERSION)
-            self.send_header("Content-Security-Policy", (
-                "default-src 'self'; base-uri 'none'; frame-ancestors 'none'; "
-                "form-action 'self'; object-src 'none'; script-src 'self'; "
-                "style-src 'self' 'unsafe-inline'"
-            ))
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("X-Frame-Options", "DENY")
-            self.send_header("Referrer-Policy", "no-referrer")
-            self.end_headers()
-            try:
-                self.wfile.write(body)
-            except (BrokenPipeError, ConnectionResetError):
-                pass
-
-        def do_GET(self) -> None:
-            path = urlparse(self.path).path
-            if path.startswith("/api/") and not self._local_request_allowed():
-                self._json({"error": "local API authorization failed"}, HTTPStatus.FORBIDDEN)
-                return
-            if path == "/":
-                self._asset("index.html", "text/html; charset=utf-8")
-            elif path == "/chat":
-                self._asset("chat.html", "text/html; charset=utf-8")
-            elif path == "/app.css":
-                self._asset("app.css", "text/css; charset=utf-8")
-            elif path == "/app.js":
-                self._asset("app.js", "text/javascript; charset=utf-8")
-            elif path == "/chat.js":
-                self._asset("chat.js", "text/javascript; charset=utf-8")
-            elif path == "/icon.svg":
-                self._asset("icon.svg", "image/svg+xml")
-            elif path == "/pilferedparrot-icon.png":
-                self._asset("pilferedparrot-icon.png", "image/png")
-            elif path == "/company-logo.png":
-                self._asset("company-logo.png", "image/png")
-            elif path == "/company-logo-dark.png":
-                self._asset("company-logo-dark.png", "image/png")
-            elif path == "/favicon.ico":
-                self.send_response(HTTPStatus.MOVED_PERMANENTLY)
-                self.send_header("Location", "/pilferedparrot-icon.png")
-                self.end_headers()
-            elif path == "/api/state":
-                self._json(app.state())
-            elif path == "/api/budgets":
-                self._json({name: value.as_dict() for name, value in app.budgets().items()})
-            else:
-                self.send_error(HTTPStatus.NOT_FOUND)
-
-        def do_POST(self) -> None:
-            try:
-                if not self._control_allowed():
-                    self._json({"error": "local control authorization failed"}, HTTPStatus.FORBIDDEN)
-                    return
-                path = urlparse(self.path).path
-                parts = path.strip("/").split("/")
-                payload = self._read_json()
-                if path == "/api/chats":
-                    self._json(app.create_chat(payload), HTTPStatus.CREATED)
-                elif path == "/api/chat/messages":
-                    self._json(app.send_chat_message(payload), HTTPStatus.ACCEPTED)
-                elif path == "/api/chat/cancel":
-                    self._json(app.cancel_chat())
-                elif path == "/api/chat/reset":
-                    self._json(app.reset_chat(payload))
-                elif path == "/api/chat/model":
-                    self._json(app.set_chat_model(payload))
-                elif path == "/api/chat/context":
-                    self._json(app.set_chat_context_window(payload))
-                elif path == "/api/chat/window":
-                    host = self.headers.get("Host", "")
-                    self._json(app.open_chat_window(f"http://{host}/chat", payload))
-                elif path == "/api/window/open":
-                    cancel_window_close()
-                    self._json({"ok": True})
-                elif path == "/api/window/close":
-                    self._json({"ok": True}, HTTPStatus.ACCEPTED)
-                    schedule_window_close(self.server)
-                elif path == "/api/shutdown":
-                    cancel_window_close()
-                    self._json({"ok": True}, HTTPStatus.ACCEPTED)
-                    threading.Thread(
-                        target=self.server.shutdown,
-                        name="pilferedparrot-window-close",
-                        daemon=True,
-                    ).start()
-                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "messages":
-                    self._json(app.send_message(parts[2], payload), HTTPStatus.ACCEPTED)
-                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "context":
-                    self._json(app.set_context_window(parts[2], payload))
-                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "cancel":
-                    self._json(app.cancel_message(parts[2]))
-                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "terminal":
-                    app.launch_terminal_command(parts[2], payload)
-                    self._json({"ok": True}, HTTPStatus.ACCEPTED)
-                else:
-                    self.send_error(HTTPStatus.NOT_FOUND)
-            except KeyError:
-                self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
-            except (ValueError, json.JSONDecodeError) as exc:
-                self._json({"error": str(exc)}, HTTPStatus.BAD_REQUEST)
-            except Exception as exc:
-                print(f"[web] request failed: {type(exc).__name__}: {exc}")
-                self._json({"error": f"PilferedParrot error: {exc}"}, HTTPStatus.INTERNAL_SERVER_ERROR)
-
-        def do_DELETE(self) -> None:
-            try:
-                if not self._control_allowed():
-                    self._json({"error": "local control authorization failed"}, HTTPStatus.FORBIDDEN)
-                    return
-                parts = urlparse(self.path).path.strip("/").split("/")
-                if len(parts) == 3 and parts[:2] == ["api", "chats"]:
-                    app.delete_chat(parts[2])
-                    self._json({"ok": True})
-                else:
-                    self.send_error(HTTPStatus.NOT_FOUND)
-            except KeyError:
-                self._json({"error": "work session not found"}, HTTPStatus.NOT_FOUND)
-
-    return Handler
+def make_handler(app: PilferedParrotApp) -> type[Any]:
+    return _server.make_handler(
+        app, asset_root=ASSET_ROOT, asset_version=ASSET_VERSION,
+        runtime_version=RUNTIME_VERSION, api_generation=API_GENERATION,
+        version=__version__,
+        timer_factory=lambda *args, **kwargs: threading.Timer(*args, **kwargs),
+        thread_factory=lambda *args, **kwargs: threading.Thread(*args, **kwargs),
+    )
 
 
 def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None) -> int:
-    web = config["web"]
-    host, port = str(web["host"]), int(web["port"])
-    if not _loopback_host(host):
-        raise ValueError("web.host must be a loopback address; remote exposure is not supported")
-    url = f"http://{host}:{port}"
-    should_open = bool(web.get("open_browser", True) if open_browser is None else open_browser)
-    status = _pilferedparrot_status(url)
-    if status == "compatible":
-        print(f"PilferedParrot is already running at {url}")
-        if should_open:
-            csrf_token = _pilferedparrot_csrf_token(url)
-            if csrf_token is None:
-                raise RuntimeError("could not attach the app window to the running server")
-            open_native_browser(_browser_url(url, csrf_token))
-        return 0
-    if status == "stale":
-        print(f"Replacing stale PilferedParrot at {url}")
-        _terminate_stale_pilferedparrot(url, port)
-    app = PilferedParrotApp(config, cwd)
-    try:
-        server = ThreadingHTTPServer((host, port), make_handler(app))
-    except OSError as error:
-        status = _pilferedparrot_status(url)
-        if error.errno != errno.EADDRINUSE or status == "other":
-            raise
-        if status == "stale":
-            _terminate_stale_pilferedparrot(url, port)
-            server = ThreadingHTTPServer((host, port), make_handler(app))
-        elif status != "compatible":
-            raise
-        else:
-            print(f"PilferedParrot is already running at {url}")
-            if should_open:
-                csrf_token = _pilferedparrot_csrf_token(url)
-                if csrf_token is None:
-                    raise RuntimeError("could not attach the app window to the running server")
-                open_native_browser(_browser_url(url, csrf_token))
-            return 0
-    recovered = app.recover_interrupted()
-    if should_open:
-        browser_url = _browser_url(url, app.csrf_token)
-        threading.Timer(0.4, lambda: open_native_browser(browser_url)).start()
-    print(f"PilferedParrot is running at {url}")
-    if recovered:
-        print(f"Recovered {recovered} interrupted response(s).")
-    print("Press Ctrl-C to stop.")
-    try:
-        server.serve_forever()
-    except KeyboardInterrupt:
-        print()
-    finally:
-        app.shutdown()
-        server.server_close()
-    return 0
+    return _server.serve(
+        config, cwd, open_browser=open_browser, create_app=PilferedParrotApp,
+        make_handler=make_handler, read_capability=_pilferedparrot_csrf_token,
+        browser_url=_browser_url, browser_open=webbrowser.open,
+        status=_pilferedparrot_status, terminate=_terminate_stale_pilferedparrot,
+        http_server=ThreadingHTTPServer, timer_factory=threading.Timer,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
