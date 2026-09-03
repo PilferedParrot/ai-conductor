@@ -20,7 +20,7 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 
 from . import __version__
@@ -35,6 +35,11 @@ from .model import Conversation, PROVIDERS, ProviderBudget
 from .qwen import ensure_qwen
 from .web_provider import ActiveRun, ProviderRunOrchestrator
 from .web_persistence import PersistentChatStore, chat_store_path, legacy_chat_store_path
+from .web_native import (
+    NativeIntegration, browser_url as native_browser_url,
+    notify_window_closed as native_notify_window_closed,
+    open_browser as open_native_browser,
+)
 
 
 ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
@@ -300,39 +305,16 @@ def _pilferedparrot_csrf_token(url: str) -> str | None:
 
 
 def _browser_url(url: str, csrf_token: str) -> str:
-    """Build an app URL whose fragment lets only this server instance be closed."""
-    return (
-        f"{url}/?generation={API_GENERATION}&assets={ASSET_VERSION}"
-        f"&runtime={RUNTIME_VERSION}#close_token={csrf_token}"
+    return native_browser_url(
+        url, csrf_token, api_generation=API_GENERATION,
+        asset_version=ASSET_VERSION, runtime_version=RUNTIME_VERSION,
     )
 
 
 def _notify_window_closed(browser_url: str) -> bool:
-    """Ask the exact local server instance associated with a closed app window to stop."""
-    try:
-        parsed = urlparse(browser_url)
-        if (
-            parsed.scheme != "http" or parsed.hostname is None
-            or not _loopback_host(parsed.hostname)
-            or parsed.username is not None or parsed.password is not None
-        ):
-            return False
-        tokens = parse_qs(parsed.fragment, keep_blank_values=True).get("close_token", [])
-        if len(tokens) != 1 or not tokens[0]:
-            return False
-        request = Request(
-            f"http://{parsed.netloc}/api/shutdown",
-            data=b"{}",
-            headers={
-                "Content-Type": "application/json",
-                "X-PilferedParrot-CSRF": tokens[0],
-            },
-            method="POST",
-        )
-        with urlopen(request, timeout=2) as response:
-            return 200 <= response.status < 300
-    except (OSError, ValueError):
-        return False
+    return native_notify_window_closed(
+        browser_url, opener=urlopen, is_loopback=_loopback_host,
+    )
 
 
 def _pilferedparrot_is_running(url: str) -> bool:
@@ -403,9 +385,7 @@ class PilferedParrotApp:
             legacy_path=legacy_chat_store_path(config),
         )
         self.csrf_token = secrets.token_urlsafe(32)
-        self.chat_window_lock = threading.RLock()
-        self.chat_window_process: subprocess.Popen[bytes] | None = None
-        self.chat_window_profile: Path | None = None
+        self.native = NativeIntegration()
         self.chat_model = str(
             config["web"].get("chat_model") or "gpt-5.6-terra"
         ).strip()
@@ -725,78 +705,8 @@ class PilferedParrotApp:
             start_new_session=True, close_fds=True,
         )
 
-    @staticmethod
-    def _chat_window_number(payload: dict[str, Any], name: str, minimum: int) -> int:
-        value = payload.get(name)
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise ValueError(f"chat window {name} is invalid")
-        number = int(value)
-        if number < minimum or number > 32_768:
-            raise ValueError(f"chat window {name} is invalid")
-        return number
-
-    def _clean_chat_window_profile(self) -> None:
-        profile = self.chat_window_profile
-        self.chat_window_profile = None
-        if profile is not None:
-            shutil.rmtree(profile, ignore_errors=True)
-
-    def _watch_chat_window(self, process: subprocess.Popen[bytes]) -> None:
-        process.wait()
-        with self.chat_window_lock:
-            if self.chat_window_process is process:
-                self.chat_window_process = None
-                self._clean_chat_window_profile()
-
     def open_chat_window(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
-        """Open Chat in a normal native window, isolated from the maximized main profile."""
-        width = self._chat_window_number(payload, "width", 320)
-        height = self._chat_window_number(payload, "height", 240)
-        left = self._chat_window_number(payload, "left", -32_768)
-        top = self._chat_window_number(payload, "top", -32_768)
-        with self.chat_window_lock:
-            process = self.chat_window_process
-            if process is not None and process.poll() is None:
-                wmctrl = shutil.which("wmctrl")
-                if wmctrl:
-                    subprocess.run(
-                        [wmctrl, "-x", "-a", "pilferedparrot-chat"], check=False,
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    )
-                return {"ok": True, "existing": True}
-            self.chat_window_process = None
-            self._clean_chat_window_profile()
-            browser = next((
-                path for candidate in (
-                    "google-chrome-stable", "google-chrome", "chromium", "chromium-browser",
-                ) if (path := shutil.which(candidate))
-            ), None)
-            if browser is None:
-                raise RuntimeError("Chrome or Chromium is required for the Chat window")
-            profile = Path(tempfile.mkdtemp(prefix="pilferedparrot-chat-"))
-            try:
-                process = subprocess.Popen(
-                    [
-                        browser, f"--user-data-dir={profile}", "--no-first-run",
-                        "--no-default-browser-check", "--disable-background-mode",
-                        "--disable-session-crashed-bubble", "--class=pilferedparrot-chat",
-                        f"--window-size={width},{height}", f"--window-position={left},{top}",
-                        f"--app={url}",
-                    ],
-                    stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
-                )
-            except Exception:
-                shutil.rmtree(profile, ignore_errors=True)
-                raise
-            self.chat_window_profile = profile
-            self.chat_window_process = process
-            watcher = threading.Thread(
-                target=self._watch_chat_window, args=(process,),
-                name="pilferedparrot-chat-window", daemon=True,
-            )
-            watcher.start()
-            return {"ok": True, "existing": False}
+        return self.native.open_chat_window(url, payload)
 
     def shutdown(self, timeout: float = 3) -> None:
         with self.runs_lock:
@@ -809,17 +719,7 @@ class PilferedParrotApp:
         for run in active:
             if run.thread is not None:
                 run.thread.join(max(0, deadline - time.monotonic()))
-        with self.chat_window_lock:
-            process = self.chat_window_process
-            if process is not None and process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=max(0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=1)
-            self.chat_window_process = None
-            self._clean_chat_window_profile()
+        self.native.shutdown(deadline=deadline)
 
 
 def make_handler(app: PilferedParrotApp) -> type[BaseHTTPRequestHandler]:
@@ -1065,7 +965,7 @@ def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None
             csrf_token = _pilferedparrot_csrf_token(url)
             if csrf_token is None:
                 raise RuntimeError("could not attach the app window to the running server")
-            webbrowser.open(_browser_url(url, csrf_token))
+            open_native_browser(_browser_url(url, csrf_token))
         return 0
     if status == "stale":
         print(f"Replacing stale PilferedParrot at {url}")
@@ -1088,12 +988,12 @@ def serve(config: dict[str, Any], cwd: Path, *, open_browser: bool | None = None
                 csrf_token = _pilferedparrot_csrf_token(url)
                 if csrf_token is None:
                     raise RuntimeError("could not attach the app window to the running server")
-                webbrowser.open(_browser_url(url, csrf_token))
+                open_native_browser(_browser_url(url, csrf_token))
             return 0
     recovered = app.recover_interrupted()
     if should_open:
         browser_url = _browser_url(url, app.csrf_token)
-        threading.Timer(0.4, lambda: webbrowser.open(browser_url)).start()
+        threading.Timer(0.4, lambda: open_native_browser(browser_url)).start()
     print(f"PilferedParrot is running at {url}")
     if recovered:
         print(f"Recovered {recovered} interrupted response(s).")
