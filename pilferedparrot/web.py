@@ -403,15 +403,26 @@ def _outside_write_target(prompt: str, writable_roots: tuple[Path, ...]) -> Path
 
 
 def _fenced_code_block_details(content: str) -> list[tuple[str | None, str]]:
-    """Extract fenced blocks using the same lightweight rules as the browser."""
-    chunks = str(content or "").replace("\r", "").split("```")
+    """Extract complete top-level fences using the browser's bounded subset."""
+    lines = str(content or "").replace("\r", "").split("\n")
     blocks: list[tuple[str | None, str]] = []
-    for raw in chunks[1::2]:
-        first, separator, rest = raw.partition("\n")
-        language = first.lower() if separator and re.fullmatch(r"[\w+-]+", first) else None
-        if language:
-            raw = rest
-        blocks.append((language, raw.strip()))
+    index = 0
+    while index < len(lines):
+        opening = re.fullmatch(r" {0,3}```(?:([A-Za-z0-9_+-]+))?[ \t]*", lines[index])
+        if opening is None:
+            index += 1
+            continue
+        closing = index + 1
+        while closing < len(lines) and re.fullmatch(
+            r" {0,3}```[ \t]*", lines[closing],
+        ) is None:
+            closing += 1
+        if closing >= len(lines):
+            break
+        language = opening.group(1)
+        blocks.append((language.lower() if language else None,
+                       "\n".join(lines[index + 1:closing]).strip()))
+        index = closing + 1
     return blocks
 
 

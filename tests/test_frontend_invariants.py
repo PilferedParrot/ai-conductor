@@ -56,6 +56,7 @@ class FrontendInvariantTests(unittest.TestCase):
         cls.index_html = (ASSET_DIR / "index.html").read_text(encoding="utf-8")
         cls.chat_js = (ASSET_DIR / "chat.js").read_text(encoding="utf-8")
         cls.chat_html = (ASSET_DIR / "chat.html").read_text(encoding="utf-8")
+        cls.markdown_js = (ASSET_DIR / "markdown.js").read_text(encoding="utf-8")
 
     def test_pick_project_launch_asks_before_creating_a_chat(self):
         """A window opened without a usable folder must ask, not start a doomed chat."""
@@ -223,11 +224,13 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertRegex(restore, r"scrollTop\s*=")
 
     def test_single_line_assistant_commands_have_terminal_action(self):
-        markdown = _function_body(self.app_js, "markdown")
+        render_messages = _function_body(self.app_js, "renderMessages")
         run_command = _function_body(self.app_js, "runTerminalCommand")
         confirm_command = _function_body(self.app_js, "confirmTerminalCommand")
-        self.assertRegex(markdown, r"data-run-command")
-        self.assertRegex(markdown, r"!code\.includes\(\"\\n\"\)")
+        self.assertIn("data-run-command", self.markdown_js)
+        self.assertRegex(self.markdown_js, r'code\.indexOf\(\"\\n\"\)\s*<\s*0')
+        self.assertIn("commandTarget: assistant && message.id", render_messages)
+        self.assertIn("shellLanguages: CODE_BLOCK_LANGUAGES", render_messages)
         self.assertIn('id="terminalDialog"', self.index_html)
         self.assertIn('id="confirmTerminal"', self.index_html)
         self.assertIn("▶", self.index_html)
@@ -911,9 +914,27 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('/api/window/close', self.app_js)
 
     def test_chat_assets_are_served_as_separate_documents(self):
+        work_markdown = self.index_html.index('<script src="/markdown.js"></script>')
+        chat_markdown = self.chat_html.index('<script src="/markdown.js"></script>')
         self.assertIn('<script src="/app.js"></script>', self.index_html)
         self.assertIn('<script src="/chat.js"></script>', self.chat_html)
         self.assertNotIn('<script src="/chat.js"></script>', self.index_html)
+        self.assertLess(work_markdown, self.index_html.index('<script src="/app.js"></script>'))
+        self.assertLess(chat_markdown, self.chat_html.index('<script src="/chat.js"></script>'))
+
+    def test_work_and_chat_use_only_the_shared_safe_markdown_renderer(self):
+        for source in (self.app_js, self.chat_js):
+            self.assertIn("globalThis.PilferedParrotMarkdown", source)
+            self.assertIn("renderMarkdown(", source)
+            self.assertNotRegex(source, r"function\s+(?:inlineMarkdown|markdown)\s*\(")
+        self.assertIn("Object.freeze({ render: render, escapeHtml: escapeHtml })", self.markdown_js)
+        self.assertNotIn("innerHTML", self.markdown_js)
+        self.assertIn('target=\\\"_blank\\\" rel=\\\"noopener noreferrer\\\"', self.markdown_js)
+        self.assertIn("http:", self.markdown_js)
+        self.assertIn("https:", self.markdown_js)
+        self.assertIn("mailto:", self.markdown_js)
+        self.assertIn(".table-scroll", self.app_css)
+        self.assertIn("blockquote", self.app_css)
 
     def test_css_has_no_font_size_below_twelve_point(self):
         css = re.sub(r"/\*.*?\*/", "", self.app_css, flags=re.DOTALL)

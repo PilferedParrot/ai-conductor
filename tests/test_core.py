@@ -1198,21 +1198,22 @@ class WebStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             for name in (
-                "index.html", "app.css", "app.js", "icon.svg",
+                "index.html", "chat.html", "app.css", "markdown.js", "app.js", "chat.js",
+                "icon.svg",
                 "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png",
             ):
                 (root / name).write_text(f"initial {name}")
             app = PilferedParrotApp(_web_config(directory), root)
             with patch("pilferedparrot.web.ASSET_ROOT", root):
                 handler_type = make_handler(app)
-            (root / "app.js").write_text("new incompatible JavaScript")
+            (root / "markdown.js").write_text("new incompatible renderer")
             handler = object.__new__(handler_type)
             handler.send_response = lambda _status: None
             handler.send_header = lambda _name, _value: None
             handler.end_headers = lambda: None
             handler.wfile = io.BytesIO()
-            handler._asset("app.js", "text/javascript")
-            self.assertEqual(handler.wfile.getvalue(), b"initial app.js")
+            handler._asset("markdown.js", "text/javascript")
+            self.assertEqual(handler.wfile.getvalue(), b"initial markdown.js")
 
     def test_delete_conflict_returns_structured_json(self):
         with tempfile.TemporaryDirectory() as directory:

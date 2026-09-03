@@ -43,6 +43,15 @@ class TerminalCommandTests(unittest.TestCase):
             ["sudo apt update", "not a language"],
         )
 
+    def test_only_complete_top_level_line_fences_can_be_commands(self):
+        content = (
+            "inline ```bash\necho inline```\n"
+            "> ```bash\n> echo quoted\n> ```\n"
+            "```bash\necho top-level\n```\n"
+            "```sh\necho unmatched"
+        )
+        self.assertEqual(_fenced_code_blocks(content), ["echo top-level"])
+
     def test_launch_uses_exact_stored_assistant_command_and_chat_cwd(self):
         with tempfile.TemporaryDirectory() as directory:
             app = _app(directory)

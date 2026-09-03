@@ -1,4 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
+const { escapeHtml, render: renderMarkdown } = globalThis.PilferedParrotMarkdown;
 const state = {
   chat: { messages: [], pending: false, model: "gpt-5.6-terra" },
   chat_history: [], chatViewId: null, chat_model: "gpt-5.6-terra",
@@ -109,32 +110,6 @@ function setupChatSidebarResizer() {
       .getPropertyValue(CHAT_SIDEBAR_LIMITS.variable));
     setChatSidebarWidth(current);
   });
-}
-
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
-  })[char]);
-}
-
-function inlineMarkdown(value) {
-  return escapeHtml(value)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
-}
-
-function markdown(value) {
-  return String(value || "").replace(/\r/g, "").split(/```/).map((chunk, index) => {
-    if (index % 2) {
-      const language = chunk.match(/^([\w+-]+)\n/);
-      const code = language ? chunk.slice(language[0].length).trim() : chunk.trim();
-      return `<div class="code-block"><pre><code>${escapeHtml(code)}</code></pre></div>`;
-    }
-    return chunk.split(/\n{2,}/).filter(Boolean).map((paragraph) =>
-      `<p>${inlineMarkdown(paragraph).replace(/\n/g, "<br>")}</p>`
-    ).join("");
-  }).join("");
 }
 
 function providerInfo(provider) {
@@ -374,7 +349,7 @@ function render() {
         const user = message.role === "user";
         return `<article class="chat-message ${user ? "user" : "assistant"} ${message.pending ? "pending" : ""} ${message.error ? "error" : ""}">
           <div class="chat-message-head">${user ? "You" : "Chat"}</div>
-          <div class="chat-message-body">${message.pending ? '<span class="thinking" aria-label="Chat is working"><i></i><i></i><i></i></span>' : markdown(message.content || "")}</div>
+          <div class="chat-message-body">${message.pending ? '<span class="thinking" aria-label="Chat is working"><i></i><i></i><i></i></span>' : renderMarkdown(message.content || "")}</div>
         </article>`;
       }).join("");
   }

@@ -1,4 +1,5 @@
 const $ = (selector) => document.querySelector(selector);
+const { escapeHtml, render: renderMarkdown } = globalThis.PilferedParrotMarkdown;
 const state = {
   chats: [], budgets: {}, activeId: null, defaultCwd: "", draftCwd: "",
   capability: "", models: {}, model_catalog: {}, default_provider: "codex",
@@ -156,42 +157,9 @@ async function api(path, options = {}) {
   return data;
 }
 
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, (char) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#039;",
-  })[char]);
-}
-
-function inlineMarkdown(value) {
-  return escapeHtml(value)
-    .replace(/`([^`]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\*([^*]+)\*/g, "<em>$1</em>");
-}
-
 const CODE_BLOCK_LANGUAGES = new Set([
   "bash", "console", "fish", "powershell", "shell", "sh", "terminal", "zsh",
 ]);
-
-function markdown(value, commandTarget = null) {
-  const chunks = String(value || "").replace(/\r/g, "").split(/```/);
-  let codeIndex = 0;
-  return chunks.map((chunk, index) => {
-    if (index % 2) {
-      const currentCodeIndex = codeIndex++;
-      const language = chunk.match(/^([\w+-]+)\n/);
-      const code = language ? chunk.slice(language[0].length).trim() : chunk.trim();
-      const shellBlock = !language || CODE_BLOCK_LANGUAGES.has(language[1].toLowerCase());
-      const runButton = commandTarget && shellBlock && code && !code.includes("\n")
-        ? `<button type="button" class="run-command" data-run-command data-message-id="${escapeHtml(commandTarget.messageId)}" data-block-index="${currentCodeIndex}" title="Run in terminal" aria-label="Run command in terminal">▶</button>`
-        : "";
-      return `<div class="code-block ${runButton ? "runnable" : ""}">${runButton}<pre><code>${escapeHtml(code)}</code></pre></div>`;
-    }
-    return chunk.split(/\n{2,}/).filter(Boolean).map((paragraph) =>
-      `<p>${inlineMarkdown(paragraph).replace(/\n/g, "<br>")}</p>`
-    ).join("");
-  }).join("");
-}
 
 function providerLabel(provider) {
   return providerInfo(provider).label;
@@ -703,7 +671,10 @@ function renderMessages() {
     </details>` : "";
     const response = message.pending
       ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>Working in ${escapeHtml(chat.cwd)}</span></div>`
-      : markdown(message.content, assistant && message.id ? { messageId: message.id } : null);
+      : renderMarkdown(message.content, {
+        commandTarget: assistant && message.id ? { messageId: message.id } : null,
+        shellLanguages: CODE_BLOCK_LANGUAGES,
+      });
     return `<article class="message ${role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
       <div class="avatar">${assistant ? escapeHtml(providerInfo(provider).initial || "A") : "Y"}</div>
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>

@@ -29,7 +29,7 @@ from urllib.request import urlopen
 ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
-    "index.html", "chat.html", "app.css", "app.js", "chat.js", "icon.svg",
+    "index.html", "chat.html", "app.css", "markdown.js", "app.js", "chat.js", "icon.svg",
     "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png",
 )
 API_GENERATION = 20
@@ -395,6 +395,8 @@ def make_handler(
                 self._asset("app.css", "text/css; charset=utf-8")
             elif path == "/app.js":
                 self._asset("app.js", "text/javascript; charset=utf-8")
+            elif path == "/markdown.js":
+                self._asset("markdown.js", "text/javascript; charset=utf-8")
             elif path == "/chat.js":
                 self._asset("chat.js", "text/javascript; charset=utf-8")
             elif path == "/icon.svg":
