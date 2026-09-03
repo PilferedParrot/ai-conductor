@@ -19,9 +19,15 @@ from pilferedparrot.dispatch import RunResult
 class FakeBudget:
     """Version-neutral provider status returned by the fake integration."""
 
+    def __init__(self, provider="codex", **values):
+        self.provider = provider
+        self.values = values
+
     def as_dict(self):
+        if self.values:
+            return {"provider": self.provider, **self.values}
         return {
-            "provider": "codex", "available": True, "window": None,
+            "provider": self.provider, "available": True, "window": None,
             "observed_at": int(time.time()), "note": "Deterministic browser fixture",
             "status": "ok", "windows": [], "auth_status": "signed_in",
             "reachability": "reachable",
@@ -80,7 +86,10 @@ class BrowserTestApp(web.PilferedParrotApp):
     """The production application with only external integrations replaced."""
 
     def budgets(self):
-        return {"codex": FakeBudget()}
+        budgets = {"codex": FakeBudget()}
+        if getattr(self, "claude_browser_budget", None) is not None:
+            budgets["claude"] = self.claude_browser_budget
+        return budgets
 
     def state(self, *args, **kwargs):
         if hasattr(self, "capabilities"):
@@ -132,7 +141,8 @@ class BrowserTestApp(web.PilferedParrotApp):
 class PilferedParrotBrowserFixture:
     """Own temporary config/state plus an ephemeral loopback HTTP server."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, include_claude: bool = False) -> None:
+        self.include_claude = include_claude
         self._temporary = tempfile.TemporaryDirectory(prefix="pilferedparrot-browser-")
         self.root = Path(self._temporary.name)
         self.project = self.root / "project"
@@ -148,6 +158,24 @@ class PilferedParrotBrowserFixture:
         web.capture_dispatch = self.provider.dispatch
         try:
             self.app = BrowserTestApp(self.config, self.project)
+            self.app.claude_browser_budget = (
+                FakeBudget(
+                    "claude", available=True, window={
+                        "remaining_percent": 17, "resets_at": int(time.time()) + 3600,
+                        "label": "Legacy Claude allowance",
+                    }, windows=[{
+                        "remaining_percent": 17, "resets_at": int(time.time()) + 3600,
+                        "label": "Legacy Claude allowance",
+                    }], observed_at=int(time.time()), note="Signed-in Claude fixture",
+                    status="ok", auth_status="signed_in", reachability="reachable",
+                    usage_status="unsupported",
+                    usage_note="Claude allowance is unavailable in PilferedParrot.",
+                ) if include_claude else None
+            )
+            if include_claude and hasattr(self.app, "issue_capability"):
+                self.app.dashboard_capability = self.app.issue_capability(
+                    "dashboard", window_id="main", provider="claude",
+                )
             if not hasattr(self.app, "dashboard_capability"):
                 self.app.dashboard_capability = self.app.csrf_token
             self.server = ThreadingHTTPServer(
@@ -170,7 +198,9 @@ class PilferedParrotBrowserFixture:
     def _config(self):
         config = deepcopy(DEFAULTS)
         state = self.root / "state"
-        config["_hidden_providers"] = ["qwen", "claude", "gemini"]
+        config["_hidden_providers"] = (
+            ["qwen", "gemini"] if self.include_claude else ["qwen", "claude", "gemini"]
+        )
         config["web"].update({
             "host": "127.0.0.1",
             "port": 0,
@@ -195,7 +225,10 @@ class PilferedParrotBrowserFixture:
     @property
     def browser_url(self) -> str:
         if hasattr(self.app, "capabilities"):
-            return f"{self.base_url}/#capability={self.app.dashboard_capability}"
+            fragment = f"capability={self.app.dashboard_capability}"
+            if self.include_claude:
+                fragment += "&provider=claude"
+            return f"{self.base_url}/#{fragment}"
         return f"{self.base_url}/"
 
     def _wait_until_ready(self) -> None:

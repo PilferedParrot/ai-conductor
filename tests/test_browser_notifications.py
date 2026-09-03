@@ -20,7 +20,11 @@ class BrowserNotificationTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.playwright = sync_playwright().start()
-        cls.browser = cls.playwright.chromium.launch(headless=True)
+        try:
+            cls.browser = cls.playwright.chromium.launch(headless=True)
+        except BaseException:
+            cls.playwright.stop()
+            raise
 
     @classmethod
     def tearDownClass(cls):

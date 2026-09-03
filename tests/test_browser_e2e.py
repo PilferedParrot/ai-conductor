@@ -6,6 +6,7 @@ import os
 import re
 import unittest
 from urllib.parse import urlparse
+from unittest.mock import patch
 
 try:
     from playwright.sync_api import expect, sync_playwright
@@ -138,6 +139,163 @@ class BrowserEndToEndTests(unittest.TestCase):
             expect(self.page.get_by_text(f"Fake provider completed: {prompt}", exact=True)).to_be_visible()
         else:
             expect(sessions).to_have_count(2)
+
+    def test_shared_markdown_renderer_is_safe_identical_and_keeps_command_actions(self):
+        formatted = (
+            "# Shared heading\n"
+            "Paragraph with a\nline break, *emphasis*, **strong**, `inline code`, "
+            "[safe link](https://example.invalid/docs?q=one&x=two), "
+            "[email](mailto:test@example.invalid), and "
+            "[unsafe link](javascript:alert(1)).\n\n"
+            "- alpha\n- beta\n\n"
+            "1. first\n2. second\n\n"
+            "> quoted response\n\n"
+            "---\n\n"
+            "| Name | Value |\n| :--- | ---: |\n| raw | <img src=https://outside.invalid/pixel> |\n\n"
+            "```python\nprint('<safe>')\n```\n\n"
+            "Unmatched fence remains visible:\n```sh\necho never-runnable"
+        )
+        commands = (
+            "```python\nprint('skip')\n```\n"
+            "```bash\necho first\n```\n"
+            "```sh\none\ntwo\n```\n"
+            "```\necho second\n```"
+        )
+        with self.fixture.app.store.lock:
+            work_chat = self.fixture.app.store.data["chats"][0]
+            work_chat["messages"] = [
+                {
+                    "id": "work-formatted", "role": "assistant", "content": formatted,
+                    "provider": "codex", "model": "fake-small",
+                },
+                {
+                    "id": "work-commands", "role": "assistant", "content": commands,
+                    "provider": "codex", "model": "fake-small",
+                },
+                {"id": "user-command", "role": "user", "content": "```bash\necho no\n```"},
+            ]
+            self.fixture.app.store.data["chat"]["messages"] = [
+                {"id": "chat-formatted", "role": "assistant", "content": formatted},
+            ]
+            self.fixture.app.store.save()
+
+        self.page.reload(wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled()
+        work_formatted = self.page.locator("article.message.assistant .message-content").first
+        expect(work_formatted.get_by_role("heading", name="Shared heading")).to_be_visible()
+        expect(work_formatted.locator("ul li")).to_have_count(2)
+        expect(work_formatted.locator("ol li")).to_have_count(2)
+        expect(work_formatted.locator("blockquote")).to_contain_text("quoted response")
+        expect(work_formatted.locator("table tbody tr")).to_have_count(1)
+        expect(work_formatted.locator(".code-block[data-language=python]")).to_be_visible()
+        expect(work_formatted.locator("img, script, iframe, object")).to_have_count(0)
+        expect(work_formatted).to_contain_text("<img src=https://outside.invalid/pixel>")
+        expect(work_formatted).to_contain_text("```sh")
+        expect(work_formatted.get_by_role("link")).to_have_count(2)
+        safe_link = work_formatted.get_by_role("link", name="safe link")
+        expect(safe_link).to_have_attribute("target", "_blank")
+        expect(safe_link).to_have_attribute("rel", "noopener noreferrer")
+        expect(work_formatted.get_by_text("[unsafe link](javascript:alert(1))")).to_be_visible()
+
+        chat_capability = self.fixture.app.issue_capability("chat", provider="codex")
+        chat_page = self.context.new_page()
+        chat_page.on("pageerror", self.page_errors.append)
+        chat_page.goto(
+            f"{self.fixture.base_url}/chat#capability={chat_capability}&provider=codex",
+            wait_until="domcontentloaded",
+        )
+        expect(chat_page.get_by_role("textbox", name="Message Chat")).to_be_enabled()
+        chat_formatted = chat_page.locator("article.chat-message.assistant .chat-message-body").first
+        expect(chat_formatted.get_by_role("heading", name="Shared heading")).to_be_visible()
+        self.assertEqual(work_formatted.inner_html(), chat_formatted.inner_html())
+
+        command_message = self.page.locator("article.message.assistant").nth(1)
+        buttons = command_message.locator("[data-run-command]")
+        expect(buttons).to_have_count(2)
+        self.assertEqual(buttons.evaluate_all("nodes => nodes.map(node => node.dataset.blockIndex)"), ["1", "3"])
+        expect(self.page.locator("article.message.user [data-run-command]")).to_have_count(0)
+        buttons.first.click()
+        dialog = self.page.locator("#terminalDialog")
+        expect(dialog).to_be_visible()
+        expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
+        with patch("pilferedparrot.web.subprocess.Popen") as popen:
+            dialog.locator("#confirmTerminal").click()
+            expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
+        self.assertTrue(popen.called)
+
+    def test_markdown_edge_cases_do_not_create_quoted_or_malformed_actions(self):
+        content = (
+            "This | is table-like prose\n"
+            "without | a delimiter row\n\n"
+            "| Literal | Result |\n"
+            "| --- | --- |\n"
+            "| a \\| b | preserved |\n\n"
+            "> outer quote\n"
+            "> > ```bash\n"
+            "> > echo quoted-only\n"
+            "> > ```\n\n"
+            "inline ```bash echo malformed``` remains text\n\n"
+            "```bash\necho runnable\n```"
+        )
+        with self.fixture.app.store.lock:
+            work_chat = self.fixture.app.store.data["chats"][0]
+            work_chat["messages"] = [{
+                "id": "edge-cases", "role": "assistant", "content": content,
+                "provider": "codex", "model": "fake-small",
+            }]
+            self.fixture.app.store.save()
+
+        self.page.reload(wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled()
+        rendered = self.page.locator("article.message.assistant .message-content")
+        expect(rendered).to_contain_text(
+            "This | is table-like prose without | a delimiter row",
+        )
+        expect(rendered.locator("table")).to_have_count(1)
+        expect(rendered.locator("table tbody tr")).to_contain_text("a | b")
+        expect(rendered.locator("blockquote blockquote")).to_contain_text("echo quoted-only")
+        expect(rendered).to_contain_text("inline ```bash echo malformed``` remains text")
+        actions = rendered.locator("[data-run-command]")
+        expect(actions).to_have_count(1)
+        self.assertEqual(actions.get_attribute("data-block-index"), "0")
+        actions.click()
+        expect(self.page.locator("#terminalCommand")).to_have_text("echo runnable")
+
+
+@unittest.skipUnless(sync_playwright, "install requirements-browser.txt to run Playwright")
+class ClaudeUsageBrowserEndToEndTests(unittest.TestCase):
+    """Exercise the provider-owned unavailable-usage contract in a real page."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.playwright = sync_playwright().start()
+        try:
+            cls.browser = cls.playwright.chromium.launch(headless=True)
+        except BaseException:
+            cls.playwright.stop()
+            raise
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.browser.close()
+        cls.playwright.stop()
+
+    def setUp(self):
+        self.fixture = PilferedParrotBrowserFixture(include_claude=True)
+        self.addCleanup(self.fixture.stop)
+        self.context = self.browser.new_context()
+        self.addCleanup(self.context.close)
+        self.page = self.context.new_page()
+        self.page.goto(self.fixture.browser_url, wait_until="domcontentloaded")
+        expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
+
+    def test_signed_in_claude_shows_note_without_allowance_widgets(self):
+        expect(self.page.locator("#providerList")).to_contain_text(
+            "Claude allowance is unavailable in PilferedParrot.",
+        )
+        expect(self.page.locator("#providerList .usage-unavailable-note")).to_have_count(1)
+        expect(self.page.locator("#providerList [role=progressbar]")).to_have_count(0)
+        expect(self.page.locator("#providerList .allowance-reset")).to_have_count(0)
 
 
 if __name__ == "__main__":
