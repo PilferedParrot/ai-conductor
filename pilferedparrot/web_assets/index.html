@@ -21,6 +21,11 @@
       </div>
 
       <nav class="sidebar-actions" aria-label="Workspace actions">
+        <button class="new-work-session" id="newWorkSession" disabled
+                title="Start a new work session"
+                aria-label="Start a new work session">
+          <span aria-hidden="true">＋</span><span>New Session</span>
+        </button>
         <button class="provider-window-button" id="providerWindows" disabled
                 title="Open the provider dashboard"
                 aria-label="Provider dashboard" aria-haspopup="dialog"
@@ -29,11 +34,6 @@
             <path d="M4 7h10M18 7h2M4 17h2M10 17h10M14 4v6M6 14v6"/>
           </svg>
           <span>Providers</span>
-        </button>
-        <button class="new-work-session" id="newWorkSession" disabled
-                title="Start a new work session"
-                aria-label="Start a new work session">
-          <span aria-hidden="true">＋</span><span>New Session</span>
         </button>
         <button class="open-chat-button" id="openChat" disabled title="Open Chat in its own window" aria-label="Open Chat window">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14v10H9l-4 3v-13Z"/></svg>
@@ -49,17 +49,18 @@
         <div id="providerList" class="provider-list"></div>
       </section>
 
-      <section class="sidebar-context" aria-labelledby="sessionContextHeading">
-        <div class="history-heading" id="sessionContextHeading">Context window</div>
-        <div class="context-pie-card" id="technicalContext"></div>
-      </section>
-
       <section class="history-group technical-history" aria-labelledby="technicalHistoryHeading">
         <div class="history-heading" id="technicalHistoryHeading">Session history</div>
         <nav class="chat-list" id="chatList" aria-label="Session history"></nav>
       </section>
 
-      <section class="sidebar-appearance">
+      <details class="sidebar-context sidebar-disclosure" id="contextDetails">
+        <summary id="sessionContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
+        <div class="context-pie-card" id="technicalContext"></div>
+      </details>
+
+      <details class="sidebar-appearance sidebar-disclosure" id="preferencesDetails">
+        <summary>Preferences</summary>
         <button class="chrome-theme-button" id="notificationPreferences" type="button" disabled
                 title="Manage desktop notifications">
           <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -76,7 +77,7 @@
           </svg>
           <span id="chromeThemeLabel">Change theme</span>
         </button>
-      </section>
+      </details>
     </aside>
 
     <div class="pane-resizer sidebar-resizer" id="sidebarResizer" role="separator"
@@ -99,17 +100,19 @@
         <div class="welcome" id="welcome">
           <img class="company-logo welcome-logo" src="/company-logo-dark.png" alt="PilferedParrot Global Industries, makers of 3D Bumper Billiards.">
           <h1>What are we working on?</h1>
-          <p>Choose a model below, then describe what you want done.</p>
+          <p>Describe your task. Choose the model and reasoning that fit.</p>
         </div>
         <div class="messages" id="messages"></div>
       </section>
 
       <footer class="composer-wrap">
+        <div id="providerUpdate" class="provider-update" role="status" hidden></div>
         <form class="composer" id="composer">
           <textarea id="prompt" rows="1" maxlength="40000" disabled placeholder="Describe what you want done" aria-label="Message"></textarea>
           <div class="composer-bar">
             <div class="composer-controls">
-              <select id="modelSelect" aria-label="Model" disabled></select>
+              <label class="composer-setting"><span>Model</span><select id="modelSelect" aria-label="Model" disabled></select></label>
+              <label class="composer-setting" id="reasoningControl" hidden><span>Reasoning</span><select id="reasoningSelect" aria-label="Reasoning effort" disabled></select></label>
             </div>
             <button type="button" class="cancel-run hidden" id="cancelButton" aria-label="Cancel response" title="Cancel response">■</button>
             <button type="submit" class="send-button" id="sendButton" aria-label="Send" disabled>↑</button>
@@ -130,6 +133,10 @@
         <input id="projectInput" type="text" autocomplete="off" spellcheck="false"
                aria-label="Project folder">
         <button type="button" class="secondary" id="browseProject">Browse…</button>
+      </div>
+      <div class="project-folder-name" aria-live="polite">
+        <span>Selected folder</span>
+        <strong id="projectFolderName">No folder selected</strong>
       </div>
       <div class="dialog-actions">
         <button value="cancel" class="secondary">Cancel</button>
@@ -160,6 +167,7 @@
           <span aria-hidden="true">↻</span> Refresh status
         </button>
       </div>
+      <p id="providerDashboardStatus" role="status" aria-atomic="true"></p>
       <button type="button" class="add-provider-button" id="addProvider">＋ Add provider</button>
       <div id="providerConnectionList" class="provider-connection-list"></div>
       <div class="dialog-actions">
@@ -177,8 +185,10 @@
       </div>
     </form>
   </dialog>
-  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/markdown.js"></script>
+  <script src="/identity.js"></script>
+  <script src="/provider-updates.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

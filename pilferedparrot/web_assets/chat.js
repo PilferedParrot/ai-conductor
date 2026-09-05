@@ -28,6 +28,7 @@ let themeBackgroundObjectUrl = null;
 let toastTimer = null;
 let notificationPermissionPending = false;
 let resetPending = false;
+let reasoningSavePending = false;
 let stateRequestSequence = 0;
 let stateAppliedSequence = 0;
 
@@ -263,6 +264,35 @@ async function api(path, options = {}) {
   return data;
 }
 
+
+const REASONING_LABELS = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum", ultra: "Ultra" };
+function reasoningOptions(provider, model) {
+  if (provider !== "codex") return [];
+  const option = state.model_catalog?.[provider]?.options?.find((item) => item.value === model);
+  return Array.isArray(option?.reasoning_efforts) ? option.reasoning_efforts : ["low", "medium", "high"];
+}
+function renderReasoningSelect(provider, model, effort, disabled, chatSurface = false) {
+  const select = $(chatSurface ? "#chatReasoningSelect" : "#reasoningSelect");
+  const options = reasoningOptions(provider, model);
+  $("#reasoningControl").hidden = !options.length;
+  const catalog = state.model_catalog?.[provider] || {};
+  const defaultLabel = (chatSurface ? catalog.chat_reasoning_default_label : catalog.reasoning_default_label)
+    || (chatSurface ? "Chat default" : "Codex default");
+  select.innerHTML = `<option value="">${escapeHtml(defaultLabel)}</option>` + options.map((value) =>
+    `<option value="${escapeHtml(value)}">${escapeHtml(REASONING_LABELS[value] || value)}</option>`).join("");
+  select.value = options.includes(effort) ? effort : "";
+  select.disabled = disabled;
+  select.title = select.value === "ultra"
+    ? "Ultra reasoning may automatically delegate work to additional agents. Applies to your next message."
+    : "Higher reasoning can take longer. Applies to your next message; Default uses the configured setting.";
+}
+function renderContextSummary(usage, status) {
+  const summary = $("#contextSummary");
+  summary.textContent = usage ? `~${Math.round(Math.max(0, Math.min(100, Number(usage.percent) || 0)))}% used` : "No data yet";
+  summary.className = status || "";
+  summary.title = "Estimated context usage. Expand for details and context settings.";
+}
+
 function contextPieMarkup(usage, adjustable = false) {
   if (!usage) return '<div class="context-pie-empty">No context data yet</div>';
   const used = Math.max(0, Number(usage.used_tokens) || 0);
@@ -331,8 +361,14 @@ function renderHistory() {
 function render() {
   const chat = viewedChat() || { messages: [] };
   const archived = Boolean(chat.archived);
+  if (state.initialized && !archived) {
+    globalThis.PilferedParrotUpdates.check(
+      api, state.windowProvider, chat.id || "chat", providerLabel(state.windowProvider),
+    );
+  }
   const messages = Array.isArray(chat.messages) ? chat.messages : [];
   const node = $("#chatMessages");
+  const identityState = globalThis.PilferedParrotIdentity.captureState(node);
   const previousScrollTop = node.scrollTop;
   const followOutput = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
   const selectedModel = archived ? chat.model : (state.draftModel || state.chat?.model || state.chat_model);
@@ -349,10 +385,11 @@ function render() {
         const user = message.role === "user";
         return `<article class="chat-message ${user ? "user" : "assistant"} ${message.pending ? "pending" : ""} ${message.error ? "error" : ""}">
           <div class="chat-message-head">${user ? "You" : "Chat"}</div>
-          <div class="chat-message-body">${message.pending ? '<span class="thinking" aria-label="Chat is working"><i></i><i></i><i></i></span>' : renderMarkdown(message.content || "")}</div>
+          <div class="chat-message-body">${message.pending ? '<span class="thinking" aria-label="Chat is working"><i></i><i></i><i></i></span>' : renderMarkdown(message.content || "")}${!user && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div>
         </article>`;
       }).join("");
   }
+  globalThis.PilferedParrotIdentity.restoreState(node, identityState);
   const context = $("#chatContext");
   const selectedUsage = contextUsageForModel(chat.context_usage, selectedModel);
   context.innerHTML = contextPieMarkup(
@@ -381,13 +418,16 @@ function render() {
     `<option value="${escapeHtml(option.value)}">${escapeHtml(modelOptionLabel(option, state.windowProvider))}</option>`
   ).join("");
   modelSelect.value = selectedModel;
-  modelSelect.disabled = !state.initialized || archived || chatRunning();
+  modelSelect.disabled = !state.initialized || archived || chatRunning() || reasoningSavePending;
+  renderReasoningSelect(state.windowProvider, selectedModel, chat.reasoning_effort,
+    !state.initialized || archived || chatRunning() || reasoningSavePending, true);
+  renderContextSummary(selectedUsage, chat.context_status);
   $("#chatPrompt").disabled = !state.initialized || archived;
   $("#chatPrompt").placeholder = archived ? "Archived chat · select Current to continue" : "Ask Chat…";
-  $("#resetChat").disabled = !state.initialized || chatRunning() || resetPending;
+  $("#resetChat").disabled = !state.initialized || chatRunning() || resetPending || reasoningSavePending;
   $("#cancelChat").classList.toggle("hidden", archived || !chatRunning());
   $("#sendChat").classList.toggle("hidden", !archived && chatRunning());
-  $("#sendChat").disabled = !state.initialized || archived || chatRunning() || !$("#chatPrompt").value.trim();
+  $("#sendChat").disabled = !state.initialized || archived || chatRunning() || reasoningSavePending || !$("#chatPrompt").value.trim();
   renderHistory();
   node.scrollTop = chat.pending && followOutput ? node.scrollHeight : previousScrollTop;
 }
@@ -419,6 +459,7 @@ async function pollProviderModels(provider = state.windowProvider, select = null
     try {
       const catalog = await api(`/api/providers/${encodeURIComponent(provider)}/models`);
       state.model_catalog[provider] = {
+        ...state.model_catalog[provider], ...catalog,
         default: catalog.default || "",
         options: Array.isArray(catalog.options) ? catalog.options : [],
       };
@@ -447,7 +488,7 @@ async function refreshState() {
   const follow = node.scrollHeight - node.scrollTop - node.clientHeight < 120;
   const previous = node.scrollTop;
   const initial = await api("/api/state");
-  if (sequence < stateAppliedSequence) return;
+  if (sequence < stateAppliedSequence || reasoningSavePending) return;
   stateAppliedSequence = sequence;
   applyServerState(initial);
   render();
@@ -462,7 +503,7 @@ function schedulePoll() {
     try {
       const sequence = ++stateRequestSequence;
       const current = await api("/api/chat/current");
-      if (sequence < stateAppliedSequence) return;
+      if (sequence < stateAppliedSequence || reasoningSavePending) return;
       stateAppliedSequence = sequence;
       state.chat = current;
       render();
@@ -476,7 +517,7 @@ function schedulePoll() {
 async function sendChatMessage(event) {
   event.preventDefault();
   const content = $("#chatPrompt").value.trim();
-  if (!content || chatRunning() || viewingArchivedChat()) return;
+  if (!content || chatRunning() || viewingArchivedChat() || reasoningSavePending) return;
   stateAppliedSequence = ++stateRequestSequence;
   const model = state.draftModel || state.chat?.model || state.chat_model;
   const requestId = globalThis.crypto?.randomUUID?.()
@@ -493,7 +534,7 @@ async function sendChatMessage(event) {
   render();
   try {
     const response = await api("/api/chat/messages", {
-      method: "POST", body: JSON.stringify({ content, model, request_id: requestId }),
+      method: "POST", body: JSON.stringify({ content, model, reasoning_effort: state.chat?.reasoning_effort || null, request_id: requestId }),
     });
     state.chat = response;
     state.chatViewId = state.chat.id;
@@ -572,6 +613,25 @@ async function selectChatModel() {
   }
 }
 
+async function selectChatReasoning() {
+  if (reasoningSavePending || chatRunning() || viewingArchivedChat()) return;
+  const reasoningEffort = $("#chatReasoningSelect").value || null;
+  reasoningSavePending = true;
+  stateAppliedSequence = ++stateRequestSequence;
+  render();
+  try {
+    state.chat = await api("/api/chat/reasoning", {
+      method: "POST", body: JSON.stringify({ reasoning_effort: reasoningEffort }),
+    });
+  } catch (error) { toast(error.message); }
+  finally {
+    stateAppliedSequence = ++stateRequestSequence;
+    reasoningSavePending = false;
+    render();
+  }
+}
+$("#chatReasoningSelect").addEventListener("change", selectChatReasoning);
+
 async function cancelChat() {
   if (!chatRunning()) return;
   try {
@@ -588,14 +648,41 @@ function resizePrompt() {
   $("#sendChat").disabled = viewingArchivedChat() || chatRunning() || !prompt.value.trim();
 }
 
+function placeToast(node) {
+  const openDialogs = document.querySelectorAll("dialog[open]");
+  const activeDialog = openDialogs[openDialogs.length - 1];
+  if (!node.classList.contains("show")) {
+    if (node.parentElement !== document.body) document.body.append(node);
+    if (typeof node.hidePopover === "function" && node.matches(":popover-open")) node.hidePopover();
+    return;
+  }
+  if (activeDialog) {
+    if (node.matches(":popover-open")) node.hidePopover();
+    if (node.parentElement !== activeDialog) activeDialog.append(node);
+    return;
+  }
+  if (node.parentElement !== document.body) document.body.append(node);
+  if (typeof node.showPopover === "function" && !node.matches(":popover-open")) {
+    node.showPopover();
+  }
+}
+new MutationObserver(() => placeToast($("#toast"))).observe(document.body, {
+  attributes: true, attributeFilter: ["open"], subtree: true,
+});
+
 function toast(message, variant = "info") {
   const node = $("#toast");
   node.textContent = message;
   node.dataset.variant = variant;
   node.classList.add("show");
+  placeToast(node);
   if (toastTimer !== null) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     node.classList.remove("show");
+    if (node.parentElement !== document.body) document.body.append(node);
+    if (typeof node.hidePopover === "function" && node.matches(":popover-open")) {
+      node.hidePopover();
+    }
     delete node.dataset.variant;
     toastTimer = null;
   }, 5200);
@@ -688,13 +775,23 @@ $("#notificationPreferences").addEventListener("click", () => {
   manageNotificationPermission().catch((error) => toast(error.message, "error"));
 });
 function setChatSidebarOpen(open) {
-  $(".chat-window-sidebar").classList.toggle("open", open);
-  $("#toggleChatSidebar").setAttribute("aria-expanded", String(open));
-  $(".chat-window-conversation").inert = open && matchMedia("(max-width: 600px)").matches;
+  const sidebar = $(".chat-window-sidebar");
+  const wasOpen = sidebar.classList.contains("open");
+  sidebar.classList.toggle("open", open);
+  syncChatSidebarAccessibility();
+  const currentMobile = matchMedia("(max-width: 600px)").matches;
   if (open) $("#closeChatSidebar").focus();
+  else if (wasOpen && currentMobile) $("#toggleChatSidebar").focus();
+}
+function syncChatSidebarAccessibility() {
+  const isMobile = matchMedia("(max-width: 600px)").matches;
+  const sidebarOpen = $(".chat-window-sidebar").classList.contains("open");
+  $("#toggleChatSidebar").setAttribute("aria-expanded", String(sidebarOpen && isMobile));
+  $(".chat-window-conversation").inert = sidebarOpen && isMobile;
 }
 $("#toggleChatSidebar").addEventListener("click", () => setChatSidebarOpen(true));
 $("#closeChatSidebar").addEventListener("click", () => setChatSidebarOpen(false));
+window.addEventListener("resize", syncChatSidebarAccessibility);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && $(".chat-window-sidebar").classList.contains("open")) {
     setChatSidebarOpen(false);

@@ -119,6 +119,9 @@ class BrowserTestApp(web.PilferedParrotApp):
         if parent is not None:
             parent()
 
+    def provider_update(self, provider: str):
+        return {"status": "current", "message": f"{provider} is up to date."}
+
     def poll_provider_models(self, provider: str):
         if provider != "codex":
             raise ValueError("unknown fake provider")
@@ -199,7 +202,7 @@ class PilferedParrotBrowserFixture:
         config = deepcopy(DEFAULTS)
         state = self.root / "state"
         config["_hidden_providers"] = (
-            ["qwen", "gemini"] if self.include_claude else ["qwen", "claude", "gemini"]
+            ["qwen", "gemini", "antigravity"] if self.include_claude else ["qwen", "claude", "gemini", "antigravity"]
         )
         config["web"].update({
             "host": "127.0.0.1",

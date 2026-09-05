@@ -6,7 +6,7 @@ const state = {
   model_context_windows: {}, browser_theme: { active: false }, budgetsLoaded: false,
   windowId: "main", windowProvider: "codex", providerModels: {}, authPending: {},
   authConfirmation: {}, authCodes: {}, providers: [], provider_templates: [],
-  providerDraft: null, preferences: {}, modelPolls: {},
+  providerDraft: null, preferences: {}, modelPolls: {}, modelFeedback: {},
   initialized: false,
 };
 const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
@@ -43,6 +43,8 @@ let providerLogoutTarget = null;
 let pendingLaunchModel = null;
 let projectSubmitPending = false;
 let createChatPending = false;
+let selectionSavePending = false;
+let draftReasoningEffort = null;
 let toastTimer = null;
 let notificationPermissionPending = false;
 let stateRequestSequence = 0;
@@ -62,6 +64,12 @@ const PANE_LIMITS = {
 };
 
 function activeChat() { return state.chats.find((chat) => chat.id === state.activeId); }
+function latestUsedChat(chats) {
+  return [...chats].sort((a, b) =>
+    (Number(b.last_used_order) || 0) - (Number(a.last_used_order) || 0)
+    || (Number(b.updated_at) || 0) - (Number(a.updated_at) || 0)
+  )[0];
+}
 function visibleChats() {
   return state.chats.filter((chat) =>
     (chat.window_id || "main") === state.windowId
@@ -219,16 +227,32 @@ function providerModelOptions(provider) {
   return providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}" ${item.value === selected ? "selected" : ""}>${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("");
 }
 
+function providerModelFeedback(provider, message) {
+  state.modelFeedback[provider] = message;
+  const node = document.querySelector(`[data-provider-model-status="${CSS.escape(provider)}"]`);
+  if (node) {
+    node.textContent = message;
+    node.hidden = !message;
+  }
+  if (!$("#providerDialog").open && message !== "Checking models…") toast(message);
+}
+
+function modelRefreshFailure(provider) {
+  const catalog = state.model_catalog[provider];
+  return catalog?.options?.length || catalog?.default
+    ? "Could not refresh models. Saved models are still available."
+    : "Could not refresh models. Check the provider connection and try again.";
+}
+
 async function pollProviderModels(provider, select = null) {
   if (!provider || state.modelPolls[provider]) return state.modelPolls[provider];
   const request = (async () => {
     if (select) select.setAttribute("aria-busy", "true");
+    providerModelFeedback(provider, "Checking models…");
     try {
       const catalog = await api(`/api/providers/${encodeURIComponent(provider)}/models`);
-      if (catalog.warning) {
-        toast(`${providerLabel(provider)} model refresh used saved choices: ${catalog.warning}`);
-      }
       state.model_catalog[provider] = {
+        ...state.model_catalog[provider], ...catalog,
         default: catalog.default || "",
         options: Array.isArray(catalog.options) ? catalog.options : [],
       };
@@ -244,9 +268,11 @@ async function pollProviderModels(provider, select = null) {
       } else if (provider === state.windowProvider) {
         renderModelSelect(provider, activeChat()?.requested_model || selected);
       }
+      providerModelFeedback(provider, catalog.warning
+        ? modelRefreshFailure(provider) : "Models refreshed.");
       return catalog;
     } catch (error) {
-      toast(`Could not refresh ${providerLabel(provider)} models: ${error.message}`);
+      providerModelFeedback(provider, modelRefreshFailure(provider));
       return null;
     } finally {
       if (select?.isConnected) select.removeAttribute("aria-busy");
@@ -354,7 +380,36 @@ function renderModelSelect(provider, requestedModel) {
     ? providerDefault + options.map((item) => `<option value="${escapeHtml(item.value)}">${escapeHtml(modelOptionLabel(item, provider))}</option>`).join("")
     : '<option value="">Provider-selected model</option>';
   select.value = requested;
-  select.disabled = !state.initialized || activeRunning();
+  select.disabled = !state.initialized || activeRunning() || selectionSavePending;
+}
+
+
+const REASONING_LABELS = { none: "None", minimal: "Minimal", low: "Low", medium: "Medium", high: "High", xhigh: "Extra high", max: "Maximum", ultra: "Ultra" };
+function reasoningOptions(provider, model) {
+  if (provider !== "codex") return [];
+  const option = state.model_catalog?.[provider]?.options?.find((item) => item.value === model);
+  return Array.isArray(option?.reasoning_efforts) ? option.reasoning_efforts : ["low", "medium", "high"];
+}
+function renderReasoningSelect(provider, model, effort, disabled, chatSurface = false) {
+  const select = $(chatSurface ? "#chatReasoningSelect" : "#reasoningSelect");
+  const options = reasoningOptions(provider, model);
+  $("#reasoningControl").hidden = !options.length;
+  const catalog = state.model_catalog?.[provider] || {};
+  const defaultLabel = (chatSurface ? catalog.chat_reasoning_default_label : catalog.reasoning_default_label)
+    || (chatSurface ? "Chat default" : "Codex default");
+  select.innerHTML = `<option value="">${escapeHtml(defaultLabel)}</option>` + options.map((value) =>
+    `<option value="${escapeHtml(value)}">${escapeHtml(REASONING_LABELS[value] || value)}</option>`).join("");
+  select.value = options.includes(effort) ? effort : "";
+  select.disabled = disabled;
+  select.title = select.value === "ultra"
+    ? "Ultra reasoning may automatically delegate work to additional agents. Applies to your next message."
+    : "Higher reasoning can take longer. Applies to your next message; Default uses the configured setting.";
+}
+function renderContextSummary(usage, status) {
+  const summary = $("#contextSummary");
+  summary.textContent = usage ? `~${Math.round(Math.max(0, Math.min(100, Number(usage.percent) || 0)))}% used` : "No data yet";
+  summary.className = status || "";
+  summary.title = "Estimated context usage. Expand for details and context settings.";
 }
 
 function relativeTime(timestamp) {
@@ -372,12 +427,24 @@ function renderChats() {
       <div class="chat-item-title">${escapeHtml(chat.title)}</div>
       <div class="chat-item-meta"><span>${escapeHtml(providerLabel(chat.provider || chat.requested_provider))}</span><span>${chat.context_status !== "normal" ? '<i class="limit-dot" title="Near practical limit" aria-label="Near practical limit">!</i>' : ""}${relativeTime(chat.updated_at)}</span></div>
     </button>`).join("");
-  list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", () => {
-    state.activeId = button.dataset.chat;
+  list.querySelectorAll("[data-chat]").forEach((button) => button.addEventListener("click", async () => {
+    const chatId = button.dataset.chat;
+    state.activeId = chatId;
     try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, state.activeId); } catch (_error) {}
     state.draftCwd = activeChat().cwd;
     render();
     setSidebarOpen(false);
+    try {
+      const updated = await api(`/api/chats/${chatId}/activate`, {
+        method: "POST", body: JSON.stringify({}),
+      });
+      state.chats = state.chats.map((chat) => chat.id === updated.id ? updated : chat)
+        .sort((a, b) => b.updated_at - a.updated_at);
+      renderChats();
+    } catch (_error) {
+      // The selected session remains usable if its best-effort recency update
+      // is interrupted by a shutdown or a transient local-server error.
+    }
   }));
 }
 
@@ -396,6 +463,7 @@ const REACHABILITY_TEXT = { unreachable: "Unreachable" };
 
 function providerReachabilityText(provider, budget) {
   if (budget?.reachability === "reachable") return "";
+  if (budget?.available && budget?.status === "auth_unverified") return "Access checked when used";
   // Qwen can be intentionally stopped between requests. When its configured
   // launcher is available, `available` means it is ready to start on demand,
   // not that the local endpoint is broken.
@@ -517,6 +585,10 @@ function renderProviderConnections() {
   list.innerHTML = draft + providerIds().map((provider) => {
     const info = providerInfo(provider);
     const budget = state.budgets[provider];
+    const missingCli = budget?.status === "cli_missing";
+    const authHelp = missingCli
+      ? info.install_help || `Install the ${providerLabel(provider)} CLI, then select Refresh status.`
+      : info.auth_help || "Connection is managed by this provider.";
     const pending = Boolean(state.authPending[provider]) && budget?.auth_status !== "signed_in";
     const baseStatus = budget
       ? STATUS_TEXT[budget.status] || AUTH_TEXT[budget.auth_status] || "Status unavailable"
@@ -526,6 +598,8 @@ function renderProviderConnections() {
       : reachability ? `${baseStatus} · ${reachability}` : baseStatus;
     const authAction = info.auth_mode !== "cli"
       ? `<span class="provider-local-note">${escapeHtml(info.auth_label || "No sign-in required")}</span>`
+      : missingCli
+        ? '<button type="button" class="secondary" disabled>Install CLI first</button>'
       : budget?.auth_status === "signed_in"
         ? `<button type="button" class="secondary" data-provider-logout="${provider}">Sign out</button>`
         : `<button type="button" class="secondary" data-provider-login="${provider}" ${pending ? "disabled" : ""}>${pending ? "Sign-in browser opened" : "Sign in"}</button>`;
@@ -549,7 +623,8 @@ function renderProviderConnections() {
           ${providerModelOptions(provider)}
         </select>
       </label>
-      <p class="provider-auth-help">${escapeHtml(info.auth_help || "Connection is managed by this provider.")}</p>
+      <p class="provider-model-status" data-provider-model-status="${provider}" role="status" ${state.modelFeedback[provider] ? "" : "hidden"}>${escapeHtml(state.modelFeedback[provider] || "")}</p>
+      <p class="provider-auth-help">${escapeHtml(authHelp)}</p>
       ${confirmation}
       <div class="provider-connection-actions">
         ${authAction}
@@ -609,6 +684,7 @@ async function refreshBudgets(showErrors = false) {
       state.budgetsLoaded = true;
       renderProviders();
       if (showErrors) toast(error.message);
+      return null;
     })
     .finally(() => { budgetRefresh = null; });
   return budgetRefresh;
@@ -652,6 +728,7 @@ function renderMessages() {
   const chat = activeChat();
   const messages = chat?.messages || [];
   const workScroll = captureWorkScroll();
+  const identityState = globalThis.PilferedParrotIdentity.captureState($("#messages"));
   $("#welcome").classList.toggle("hidden", messages.length > 0);
   $("#messages").innerHTML = messages.map((message, messageIndex) => {
     const assistant = message.role === "assistant";
@@ -670,7 +747,7 @@ function renderMessages() {
         </div>`).join("")}</div>
     </details>` : "";
     const response = message.pending
-      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>Working in ${escapeHtml(chat.cwd)}</span></div>`
+      ? `<div class="pending-line"><span class="thinking" aria-label="${escapeHtml(providerLabel(provider))} is working"><i></i><i></i><i></i></span><span>${escapeHtml((activity.at(-1)?.content || `Starting ${providerLabel(provider)}…`).slice(0, 240))} · ${escapeHtml(relativeTime(message.created_at))}</span></div>`
       : renderMarkdown(message.content, {
         commandTarget: assistant && message.id ? { messageId: message.id } : null,
         shellLanguages: CODE_BLOCK_LANGUAGES,
@@ -678,10 +755,11 @@ function renderMessages() {
     return `<article class="message ${role} ${message.error ? "error" : ""}" data-provider="${assistant ? escapeHtml(provider) : ""}">
       <div class="avatar">${assistant ? escapeHtml(providerInfo(provider).initial || "A") : "Y"}</div>
       <div class="message-body"><div class="message-head"><span class="message-name">${escapeHtml(name)}</span>${message.cancelled ? '<span class="message-state">Cancelled</span>' : ""}</div>
-      <div class="message-content">${work}${response}</div></div>
+      <div class="message-content">${work}${response}${assistant && !message.pending ? globalThis.PilferedParrotIdentity.render(message) : ""}</div></div>
     </article>`;
   }).join("");
   restoreWorkScroll(workScroll);
+  globalThis.PilferedParrotIdentity.restoreState($("#messages"), identityState);
 }
 
 function clampPaneWidth(name, value) {
@@ -767,6 +845,7 @@ function renderHeader() {
     );
     const adjustable = selectedProvider === "codex" && Number(selectedUsage.max_tokens) > 0;
     context.innerHTML = contextPieMarkup(selectedUsage, "Work session", adjustable);
+    renderContextSummary(selectedUsage, chat.context_status);
     context.className = `context-pie-card ${chat.context_status || "normal"}`;
     context.title = chat.context_status === "limit"
       ? "Near practical limit · start a new work session"
@@ -788,11 +867,21 @@ function renderHeader() {
   } else {
     context.innerHTML = '<div class="context-pie-empty">No context data yet</div>';
     context.className = "context-pie-card";
+    renderContextSummary(null);
   }
   renderModelSelect(state.windowProvider, chat?.requested_model || "");
+  renderReasoningSelect(state.windowProvider, $("#modelSelect").value,
+    chat ? chat.reasoning_effort : draftReasoningEffort,
+    !state.initialized || activeRunning() || selectionSavePending);
 }
 
 function render() {
+  if (state.initialized) {
+    const selected = activeChat();
+    globalThis.PilferedParrotUpdates.check(
+      api, state.windowProvider, selected?.id || "new", providerLabel(state.windowProvider),
+    );
+  }
   document.body.dataset.windowProvider = state.windowProvider;
   renderChats();
   renderProviders();
@@ -801,8 +890,10 @@ function render() {
   const running = activeRunning();
   const ready = state.initialized;
   $("#prompt").disabled = !ready;
-  $("#newWorkSession").disabled = !ready || createChatPending;
-  $("#openChat").disabled = !ready;
+  $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending;
+  const chatSupported = providerInfo(state.windowProvider).capabilities?.chat !== false;
+  $("#openChat").disabled = !ready || !chatSupported;
+  $("#openChat").title = chatSupported ? "Open Chat" : "This provider supports Work only; read-only Chat is not yet supported.";
   $("#providerWindows").disabled = !ready;
   $("#refreshBudgets").disabled = !ready;
   $("#chromeTheme").disabled = !ready;
@@ -810,19 +901,46 @@ function render() {
   $("#notificationPreferencesLabel").textContent = notificationPermissionLabel();
   $("#projectButton").disabled = !ready;
   $("#sendButton").classList.toggle("hidden", running);
-  $("#sendButton").disabled = !ready || running || !$("#prompt").value.trim();
+  $("#sendButton").disabled = !ready || running || selectionSavePending || !$("#prompt").value.trim();
   $("#cancelButton").classList.toggle("hidden", !running);
   $("#cancelButton").disabled = Boolean(pendingMessage()?.cancel_requested);
 }
+
+function placeToast(node) {
+  const openDialogs = document.querySelectorAll("dialog[open]");
+  const activeDialog = openDialogs[openDialogs.length - 1];
+  if (!node.classList.contains("show")) {
+    if (node.parentElement !== document.body) document.body.append(node);
+    if (typeof node.hidePopover === "function" && node.matches(":popover-open")) node.hidePopover();
+    return;
+  }
+  if (activeDialog) {
+    if (node.matches(":popover-open")) node.hidePopover();
+    if (node.parentElement !== activeDialog) activeDialog.append(node);
+    return;
+  }
+  if (node.parentElement !== document.body) document.body.append(node);
+  if (typeof node.showPopover === "function" && !node.matches(":popover-open")) {
+    node.showPopover();
+  }
+}
+new MutationObserver(() => placeToast($("#toast"))).observe(document.body, {
+  attributes: true, attributeFilter: ["open"], subtree: true,
+});
 
 function toast(message, variant = "info") {
   const node = $("#toast");
   node.textContent = message;
   node.dataset.variant = variant;
   node.classList.add("show");
+  placeToast(node);
   if (toastTimer !== null) clearTimeout(toastTimer);
   toastTimer = setTimeout(() => {
     node.classList.remove("show");
+    if (node.parentElement !== document.body) document.body.append(node);
+    if (typeof node.hidePopover === "function" && node.matches(":popover-open")) {
+      node.hidePopover();
+    }
     delete node.dataset.variant;
     toastTimer = null;
   }, 5200);
@@ -943,7 +1061,7 @@ async function refreshBrowserTheme(notify = false) {
 }
 
 async function createChat(requestedModel = "") {
-  if (createChatPending) return null;
+  if (createChatPending || selectionSavePending) return null;
   createChatPending = true;
   $("#newWorkSession").disabled = true;
   const provider = state.windowProvider;
@@ -952,6 +1070,10 @@ async function createChat(requestedModel = "") {
       method: "POST",
       body: JSON.stringify({
         cwd: state.draftCwd || state.defaultCwd, provider, model: requestedModel || null,
+        // The empty option is an explicit "Default" choice.  Do not revive a
+        // stale draft effort when the user has selected it.
+        reasoning_effort: activeChat() || $("#reasoningSelect").options.length
+          ? $("#reasoningSelect").value || null : undefined,
       }),
     });
     state.chats.unshift(chat);
@@ -972,9 +1094,14 @@ async function createChat(requestedModel = "") {
 async function sendMessage(event) {
   event.preventDefault();
   const content = $("#prompt").value.trim();
-  if (!state.initialized || !content || activeRunning() || createChatPending) return;
+  if (!state.initialized || !content || activeRunning() || createChatPending || selectionSavePending) return;
+  if (pendingLaunchModel !== null) {
+    openProjectDialog(true);
+    return;
+  }
   const selectedProvider = state.windowProvider;
   const selectedModel = $("#modelSelect").value;
+  const reasoningEffort = $("#reasoningSelect").value || null;
   if (!activeChat()) {
     try {
       await createChat();
@@ -1011,6 +1138,7 @@ async function sendMessage(event) {
       method: "POST",
       body: JSON.stringify({
         content, provider: selectedProvider, model: selectedModel, cwd: state.draftCwd,
+        reasoning_effort: reasoningEffort,
         request_id: requestId,
       }),
     });
@@ -1050,7 +1178,7 @@ function resizePrompt() {
   const prompt = $("#prompt");
   prompt.style.height = "auto";
   prompt.style.height = `${Math.min(prompt.scrollHeight, 180)}px`;
-  $("#sendButton").disabled = activeRunning() || !prompt.value.trim();
+  $("#sendButton").disabled = activeRunning() || selectionSavePending || !prompt.value.trim();
 }
 
 function applyServerState(initial) {
@@ -1081,7 +1209,7 @@ async function refreshState() {
   const followOutput = conversation.scrollHeight - conversation.scrollTop
     - conversation.clientHeight < 120;
   const initial = await api("/api/state");
-  if (sequence < stateAppliedSequence) return;
+  if (sequence < stateAppliedSequence || selectionSavePending) return;
   stateAppliedSequence = sequence;
   applyServerState(initial);
   render();
@@ -1201,7 +1329,7 @@ async function init() {
       try { savedActiveId = sessionStorage.getItem(ACTIVE_CHAT_SESSION_KEY) || ""; } catch (_error) {}
       const chats = visibleChats();
       state.activeId = chats.some((chat) => chat.id === savedActiveId)
-        ? savedActiveId : chats[0]?.id || null;
+        ? savedActiveId : latestUsedChat(chats)?.id || null;
       state.draftCwd = activeChat()?.cwd || state.defaultCwd;
       if (!state.activeId) await createChat(fragmentModel);
     }
@@ -1383,20 +1511,35 @@ $("#prompt").addEventListener("keydown", (event) => {
     $("#composer").requestSubmit();
   }
 });
-$("#newWorkSession").addEventListener("click", () => createChat(
-  $("#modelSelect").value || preferredModel(state.windowProvider),
-)
-  .then(choosePromptSuggestion)
-  .catch((error) => toast(error.message)));
+$("#newWorkSession").addEventListener("click", () => {
+  if (pendingLaunchModel !== null) {
+    openProjectDialog(true);
+    return;
+  }
+  createChat($("#modelSelect").value || preferredModel(state.windowProvider))
+    .then(choosePromptSuggestion)
+    .catch((error) => toast(error.message));
+});
 $("#providerWindows").addEventListener("click", () => {
   renderProviderConnections();
   $("#providerDialog").showModal();
 });
 $("#refreshProviderDashboard").addEventListener("click", async () => {
   const button = $("#refreshProviderDashboard");
+  const feedback = $("#providerDashboardStatus");
+  const label = button.innerHTML;
   button.disabled = true;
-  try { await refreshBudgets(true); }
-  finally { button.disabled = false; }
+  button.setAttribute("aria-busy", "true");
+  button.textContent = "Checking…";
+  feedback.textContent = "Checking provider status…";
+  try {
+    const budgets = await refreshBudgets(false);
+    feedback.textContent = budgets ? "Status refreshed." : "Could not refresh status. Try again.";
+  } finally {
+    button.innerHTML = label;
+    button.disabled = false;
+    button.removeAttribute("aria-busy");
+  }
 });
 $("#cancelButton").addEventListener("click", cancelMessage);
 $("#openChat").addEventListener("click", openChatWindow);
@@ -1409,17 +1552,45 @@ $("#messages").addEventListener("click", (event) => {
   const button = event.target.closest("[data-run-command]");
   if (button) runTerminalCommand(button);
 });
-$("#modelSelect").addEventListener("change", async () => {
+async function saveWorkSelection(modelChanged = false) {
+  if (selectionSavePending || activeRunning()) return;
   const chat = activeChat();
   const model = $("#modelSelect").value;
-  if (chat) chat.requested_model = model || null;
-  if (!model) return;
+  const selected = $("#reasoningSelect").value || null;
+  const effort = reasoningOptions(state.windowProvider, model).includes(selected) ? selected : null;
+  const previousModel = chat?.requested_model;
+  selectionSavePending = true;
+  $("#modelSelect").disabled = true;
+  $("#reasoningSelect").disabled = true;
+  $("#sendButton").disabled = true;
+  $("#newWorkSession").disabled = true;
+  stateAppliedSequence = ++stateRequestSequence;
   try {
-    state.preferences = await api("/api/preferences/provider", {
-      method: "POST", body: JSON.stringify({ provider: state.windowProvider, model }),
-    });
-  } catch (error) { toast(error.message); }
-});
+    if (modelChanged && model) {
+      state.preferences = await api("/api/preferences/provider", {
+        method: "POST", body: JSON.stringify({ provider: state.windowProvider, model }),
+      });
+    }
+    if (chat) {
+      const updated = await api(`/api/chats/${chat.id}/reasoning`, {
+        method: "POST", body: JSON.stringify({ model, reasoning_effort: effort }),
+      });
+      state.chats = state.chats.map((item) => item.id === updated.id ? updated : item);
+    } else {
+      draftReasoningEffort = effort;
+    }
+    if (modelChanged && selected && !effort) toast("Reasoning reset to default for this model.");
+  } catch (error) {
+    if (chat) chat.requested_model = previousModel;
+    toast(error.message);
+  } finally {
+    stateAppliedSequence = ++stateRequestSequence;
+    selectionSavePending = false;
+    render();
+  }
+}
+$("#modelSelect").addEventListener("change", () => saveWorkSelection(true));
+$("#reasoningSelect").addEventListener("change", () => saveWorkSelection());
 $("#modelSelect").addEventListener("pointerdown", (event) => {
   pollProviderModels(state.windowProvider, event.currentTarget);
 });
@@ -1441,8 +1612,25 @@ $("#refreshBudgets").addEventListener("click", async () => {
 function openProjectDialog(needsChoice) {
   $("#projectNotice").hidden = !needsChoice;
   $("#projectInput").value = needsChoice ? "" : state.draftCwd;
+  updateProjectFolderName();
   $("#projectDialog").showModal();
 }
+function projectFolderName(path) {
+  const value = String(path || "").trim();
+  if (!value) return "No folder selected";
+  const withoutTrailingSeparators = value.replace(/\/+$/, "");
+  if (!withoutTrailingSeparators) return value;
+  const segments = withoutTrailingSeparators.split("/");
+  return segments[segments.length - 1] || withoutTrailingSeparators;
+}
+function updateProjectFolderName() {
+  const input = $("#projectInput");
+  const name = $("#projectFolderName");
+  const path = input.value.trim();
+  name.textContent = projectFolderName(path);
+  name.title = path;
+}
+$("#projectInput").addEventListener("input", updateProjectFolderName);
 $("#browseProject").addEventListener("click", async () => {
   const button = $("#browseProject");
   button.disabled = true;
@@ -1456,6 +1644,7 @@ $("#browseProject").addEventListener("click", async () => {
     });
     if (selected.path) {
       $("#projectInput").value = selected.path;
+      updateProjectFolderName();
       $("#projectInput").focus();
     }
   } catch (error) {
@@ -1477,10 +1666,7 @@ $("#projectForm").addEventListener("submit", async (event) => {
     event.preventDefault();
     return;
   }
-  if (event.submitter?.value === "cancel") {
-    if (pendingLaunchModel !== null) toast("Choose a project folder to start working here.");
-    return;
-  }
+  if (event.submitter?.value === "cancel") return;
   event.preventDefault();
   const chosen = $("#projectInput").value.trim();
   // A launch that is still waiting for a folder has no default worth falling
@@ -1493,11 +1679,17 @@ $("#projectForm").addEventListener("submit", async (event) => {
   if (pendingLaunchModel !== null) {
     const model = pendingLaunchModel;
     const saveButton = $("#saveProject");
+    const launchDraft = $("#prompt").value;
     projectSubmitPending = true;
     saveButton.disabled = true;
     try {
       await createChat(model);
       pendingLaunchModel = null;
+      if (launchDraft) {
+        $("#prompt").value = launchDraft;
+        resizePrompt();
+        render();
+      }
     } catch (error) {
       toast(error.message);
       return;
@@ -1595,13 +1787,23 @@ $("#providerLogoutForm").addEventListener("submit", (event) => {
 });
 $("#providerLogoutDialog").addEventListener("close", () => { providerLogoutTarget = null; });
 function setSidebarOpen(open) {
-  $("#sidebar").classList.toggle("open", open);
-  $("#openSidebar").setAttribute("aria-expanded", String(open));
-  $(".main").inert = open && matchMedia("(max-width: 760px)").matches;
+  const sidebar = $("#sidebar");
+  const wasOpen = sidebar.classList.contains("open");
+  sidebar.classList.toggle("open", open);
+  syncSidebarAccessibility();
+  const currentMobile = matchMedia("(max-width: 760px)").matches;
   if (open) $("#closeSidebar").focus();
+  else if (wasOpen && currentMobile) $("#openSidebar").focus();
+}
+function syncSidebarAccessibility() {
+  const isMobile = matchMedia("(max-width: 760px)").matches;
+  const sidebarOpen = $("#sidebar").classList.contains("open");
+  $("#openSidebar").setAttribute("aria-expanded", String(sidebarOpen && isMobile));
+  $(".main").inert = sidebarOpen && isMobile;
 }
 $("#openSidebar").addEventListener("click", () => setSidebarOpen(true));
 $("#closeSidebar").addEventListener("click", () => setSidebarOpen(false));
+window.addEventListener("resize", syncSidebarAccessibility);
 document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && $("#sidebar").classList.contains("open")) {
     setSidebarOpen(false);

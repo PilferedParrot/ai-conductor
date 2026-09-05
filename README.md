@@ -1,6 +1,28 @@
 # PilferedParrot
 
-PilferedParrot is a local browser interface for four coding engines:
+> **Linux preview · v0.5.0**
+>
+> PilferedParrot is a local Linux interface for coding CLIs and compatible local or remote
+> models. It keeps the provider you choose visible while giving you one browser workspace for
+> technical work and provider-matched Chat.
+>
+> [Project page](https://pilferedparrot.github.io/ai-conductor/) ·
+> [v0.5.0 release](https://github.com/PilferedParrot/ai-conductor/releases/tag/v0.5.0) ·
+> [Report a bug](https://github.com/PilferedParrot/ai-conductor/issues/new?template=bug_report.yml) ·
+> [Share feedback](https://github.com/PilferedParrot/ai-conductor/issues/new/choose)
+
+![PilferedParrot Work preview](docs/assets/work-preview.png)
+
+*Synthetic conversation shown for illustration; no real account or chat data is included.*
+
+This public preview is intended for Linux. It has been best validated on Linux Mint with X11.
+Google Antigravity currently supports **Work** only; other provider accounts and compatible
+endpoints require your own setup and credentials. See [provider compatibility](docs/provider-compatibility.md)
+and the [provider validation notes](docs/provider-expansion-validation.md) for current limits.
+
+## What it supports
+
+PilferedParrot is a local browser interface for coding engines and compatible model APIs:
 
 - **Local Qwen**, served through an OpenAI-compatible endpoint and equipped with contained file,
   shell, and diff tools.
@@ -8,40 +30,54 @@ PilferedParrot is a local browser interface for four coding engines:
   approval behavior.
 - **Claude Code**, run through the authenticated Claude CLI in non-interactive print mode while
   preserving its provider session between turns.
-- **Google Gemini**, run through the authenticated Gemini CLI in headless streaming mode with
-  resumable, project-scoped sessions.
+- **Google Antigravity**, through the current Antigravity CLI (`agy`), with model discovery,
+  streamed Work progress, native conversation continuation, and cancellation. Read-only Chat
+  is not yet supported for this integration.
+- **Google Gemini**, through Gemini CLI with supported API or organization authentication,
+  or through the Google AI Studio API template. Consumer Google sign-in no longer provides
+  Gemini CLI access; see [provider compatibility](docs/provider-compatibility.md).
 
 The operator chooses the provider. PilferedParrot does not ask one model to route, delegate, review,
 or adjudicate another model's work.
 
 The browser also opens **Chat** in its own floating window, powered by a separate read-only session
-from the provider active in the work window that opened it. Chat offers that provider's model menu.
+from a supported provider active in the work window that opened it. Chat offers that provider's model menu;
+Antigravity currently supports Work only.
 It is an ordinary conversation kept separate from work sessions; it is not an interpreter or hidden
 router.
 
-The project targets Linux and Python 3.12 or later. Qwen shell tools require
-[Bubblewrap](https://github.com/containers/bubblewrap). The Python application has no third-party
-package dependencies.
+The project targets Linux and Python 3.12 or later. Chrome or Chromium is the preferred browser.
+Bubblewrap is needed when a provider uses API or local shell tools; it is not needed just to open
+the browser interface. The Python application has no third-party package dependencies.
 
 ## Install and configure
 
+On a Linux machine with Python 3.12 or later and Chrome or Chromium installed, open a terminal and
+run:
+
 ```bash
-git clone https://github.com/PilferedParrot/ai-conductor.git PilferedParrot
+git clone --branch v0.5.0 https://github.com/PilferedParrot/ai-conductor.git PilferedParrot
 cd PilferedParrot
 cp config.example.json config.json
 ```
+
+Start the interface:
+
+```bash
+./bin/pilferedparrot
+```
+
+In the browser, open **Providers** and select a configured, authenticated provider. If you use a
+compatible endpoint instead, choose **Add provider** and enter its endpoint and credential
+environment variable. Provider access, model availability, pricing, and limits belong to the
+account or service you configure; this preview does not promise free provider usage or universal
+compatibility.
 
 `config.json` is ignored so machine-specific paths stay local. Start your Qwen server yourself,
 or set `qwen.auto_start` to `true` and provide `qwen.start_command` as an argument array. The
 committed example leaves automatic startup disabled. Existing config files are tightened to mode
 `0600` when loaded on POSIX systems. All defaults are in
 `pilferedparrot/config.py`.
-
-Start the browser interface:
-
-```bash
-./bin/pilferedparrot
-```
 
 It listens on `http://127.0.0.1:8765` and opens a dedicated app-style browser window when the
 launcher can find Chrome or Chromium. Chats and run metadata persist under
@@ -51,9 +87,10 @@ known legacy state files and browser profile into the new directory without over
 Closing the last PilferedParrot work window stops its local server and cancels any active provider
 run; closing only the optional Chat window does not.
 
-Use **Providers** in the header to open the provider dashboard. It shows connection state, lets you
+Use **Providers** in the sidebar to open the provider dashboard. It shows connection state, lets you
 choose a model, and can start another maximized app window with that fixed provider and model.
-Every LLM integration is one card. Use **Add provider** to add xAI/Grok, OpenRouter, Ollama, or any
+Every LLM integration is one card. Use **Add provider** to add xAI/Grok, OpenRouter,
+Google AI Studio/Gemini API, Mistral/Devstral, LM Studio, Ollama, or any
 service with an OpenAI-compatible chat-completions and tool-calling API. Presets fill the standard
 base URL and credential environment-variable name; leave Model ID blank to discover available
 models automatically. PilferedParrot stores settings beside the chat store (or at
@@ -72,11 +109,40 @@ terminal link or command is part of the user flow. The dashboard detects complet
 clear **Use Provider** action. Authentication and account choices remain owned by the provider CLI;
 PilferedParrot never receives the account password.
 
-Use **Appearance → Choose this window's theme** in the sidebar to open Chrome's theme gallery with
+Use **Preferences → Change theme** in the sidebar to open Chrome's theme gallery with
 PilferedParrot's dedicated browser profile. PilferedParrot runs as a private Chrome app window, and
 this control does not change the Chrome theme used for normal browsing. The selected theme persists for the main app window and
 PilferedParrot applies its colors and available new-tab background artwork when the user returns to
 the app. The isolated Chat window uses the same selected theme without sharing browser state.
+
+The model picker sits beside **Reasoning** at the bottom of the composer in both work and Chat.
+For Codex, choose a supported effort for the next message; the choice is saved with that session
+and can change between turns without resetting the conversation. **Codex default** leaves work
+sessions on the configured `codex.reasoning_effort`, or the CLI's settings when no override is set.
+**Chat default** uses `web.chat_reasoning_effort` (low by default), independently of the CLI's default.
+These choices do not rewrite your Codex terminal configuration. Supported levels come from Codex's
+local model catalog, with low/medium/high as a fallback when metadata is absent. A structured
+Codex `model_options` entry can override `reasoning_efforts`; an empty array hides the control.
+Providers without a supported reasoning control keep their model picker alone. Switching to a model
+that cannot use the selected effort resets reasoning to Default.
+
+New work sessions inherit the model and reasoning choice from the most recently used session in
+that provider window, including an explicit Default choice. These choices survive restarting PPI;
+an incompatible inherited reasoning level resets to Default when choosing another model.
+
+Expand **Response details** beneath a new Work or Chat reply to inspect its requested model and
+destination. Compatible APIs also record the model IDs returned by the server, including tool-loop
+responses. Requested and reported identifiers are neutral details: aliases and model-file paths
+can name the same model differently, so a text difference does not trigger a mismatch warning.
+Local models receive their configured provider, model, and endpoint information in the system
+prompt. A loopback destination shows that PPI contacted this machine, but a proxy can forward the
+request elsewhere. Server-reported IDs and the model's own description do not independently prove
+the loaded weights. CLI replies show the configured request without a server-reported model ID;
+older replies have no routing record.
+
+Session history uses the sidebar's available space. Expand **Context window** for token estimates
+and context limits, or **Preferences** for notifications and appearance. The collapsed context
+summary keeps estimated usage visible without occupying a full settings panel.
 
 The browser shows:
 
@@ -145,6 +211,7 @@ Other commands remain available for diagnostics and scripts:
 ./bin/pilferedparrot run --provider codex "implement the agreed fix"
 ./bin/pilferedparrot run --provider claude "review the implementation"
 ./bin/pilferedparrot run --provider gemini "summarize the design"
+./bin/pilferedparrot run --provider antigravity "inspect this repository"
 ```
 
 Run `./bin/install-pilferedparrot-desktop` to replace the old Mint/Cinnamon start-menu entry and
@@ -172,11 +239,12 @@ allowance data is unavailable. It shows no Claude allowance bar or reset countdo
 and context telemetry reported by Claude execution remains available and is separate from account
 allowance reporting.
 
-Authentication normalization trusts only a successful CLI result whose supported `loggedIn` field
-is explicitly `true` or `false`. Missing CLI, timeout, nonzero exit, malformed JSON, and a successful
-result without that boolean normalize to unknown. The supported status output has no reliable token
-expiration state, so expiration-like failures also normalize to unknown instead of being inferred
-from free-form stdout or stderr.
+Authentication normalization trusts only a supported `loggedIn` boolean. Claude's current CLI may
+return `loggedIn: false` with exit status 1 for a normal signed-out result, which PilferedParrot
+recognizes as signed out. Missing CLI, timeout, malformed JSON, a nonzero result without that
+supported signed-out shape, and a successful result without the boolean normalize to unknown. The
+supported status output has no reliable token expiration state, so expiration-like failures also
+normalize to unknown instead of being inferred from free-form stdout or stderr.
 
 This release removes the former direct Claude OAuth allowance integration. Existing chat history
 and historical ledger records are left intact; older ledger snapshots may still contain Claude
@@ -189,7 +257,7 @@ PilferedParrot deliberately keeps the provider path thin:
 
 All execution goes through a `ProviderAdapter` contract for run/resume/cancel, normalized progress,
 per-turn token and context usage, capabilities, authentication, execution availability, allowance
-reporting availability, and model discovery. Codex, Claude, Gemini, and OpenAI-compatible endpoints
+reporting availability, and model discovery. Codex, Claude, Gemini, Antigravity, and OpenAI-compatible endpoints
 retain separate implementations behind that contract.
 
 - A Codex turn receives the user's prompt directly. PilferedParrot does not prepend a policy document,
@@ -201,7 +269,8 @@ retain separate implementations behind that contract.
   from the work window that opens it, then lets the user choose another model in that provider family.
   It receives the Chat message directly and does not receive hidden work-session snapshots. Resetting
   Chat does not reset a work session.
-- Chat and each work session show an estimated next-request live-context pie against the usable
+- Chat and each work session show estimated next-request live-context usage; expand **Context window**
+  for the detailed pie against the usable
   model limit. A new work session starts at zero and begins accounting when its first request
   starts. After a request, the estimate uses the provider's final per-request input plus its
   latest output; this includes injected instructions, tools and relevant results, workspace context,
@@ -289,6 +358,8 @@ python3 -m compileall -q pilferedparrot tests
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
+Provider requirements and integration limits are listed in
+[Provider compatibility](docs/provider-compatibility.md).
 
 ## License
 
@@ -297,3 +368,12 @@ the attribution notices described in the license and [NOTICE](NOTICE) file.
 
 If PilferedParrot is useful to you, you can support its development on
 [Patreon](https://www.patreon.com/PilferedParrot).
+
+When a work session or Chat opens, PPI checks the selected provider's CLI for updates
+in the background. Codex, Claude Code, and Gemini CLI checks compare the installed
+version with the public npm registry. The notice above the composer reports the
+result and an update command when a newer version is available; PPI does not install
+updates automatically. Offline or failed checks leave the session usable. Remote
+models and manually managed local models report that no automatic CLI check applies.
+Reopening a session or reloading the window checks again. During a work response,
+the status line shows the latest reported activity; expand Work details for the log.

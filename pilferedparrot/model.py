@@ -25,6 +25,7 @@ PROVIDER_CATALOG: tuple[dict[str, Any], ...] = (
         "description": "OpenAI's coding agent through your local Codex CLI.",
         "auth_mode": "cli",
         "login_command": "codex login",
+        "install_help": "Install the OpenAI Codex CLI, then select Refresh status to enable sign-in.",
         "auth_help": "Sign-in opens in your default browser and stays with OpenAI.",
         "login_help": "Complete the OpenAI sign-in in your browser, then return here.",
     },
@@ -35,8 +36,19 @@ PROVIDER_CATALOG: tuple[dict[str, Any], ...] = (
         "description": "Anthropic's coding agent through your local Claude Code CLI.",
         "auth_mode": "cli",
         "login_command": "claude auth login",
+        "install_help": "Install the Claude Code CLI, then select Refresh status to enable sign-in.",
         "auth_help": "Sign-in opens in your default browser and stays with Anthropic.",
         "login_help": "Complete the Anthropic sign-in at claude.ai in your browser, then return here.",
+    },
+    {
+        "id": "antigravity",
+        "label": "Google Antigravity",
+        "initial": "A",
+        "description": "Google's coding agent through the local Antigravity CLI. Work only; read-only Chat is not yet supported.",
+        "auth_mode": "external_cli",
+        "auth_label": "Uses your Antigravity CLI authentication",
+        "install_help": "Install Antigravity CLI from antigravity.google, then run agy in a terminal to sign in.",
+        "auth_help": "Run agy in a terminal to complete Google's sign-in. Use agy update if your CLI lacks streaming support. Account access is checked when used.",
     },
     {
         "id": "gemini",
@@ -44,8 +56,9 @@ PROVIDER_CATALOG: tuple[dict[str, Any], ...] = (
         "initial": "G",
         "description": "Google's coding agent through the local Gemini CLI.",
         "auth_mode": "external_cli",
-        "auth_label": "Uses your Gemini CLI sign-in",
-        "auth_help": "Run gemini once in a terminal to choose or change Google sign-in.",
+        "auth_label": "Uses your Gemini CLI authentication",
+        "install_help": "Install the Gemini CLI, then run gemini in a terminal to configure an API key or supported organization account.",
+        "auth_help": "Consumer Google sign-in is no longer supported by Gemini CLI. Configure an API key or supported organization account in gemini, or add the Google AI Studio / Gemini API provider.",
     },
 )
 PROVIDERS = tuple(item["id"] for item in PROVIDER_CATALOG)
@@ -199,9 +212,11 @@ class Conversation:
     provider_session_id: str | None = None
     messages: list[dict[str, Any]] = field(default_factory=list)
     token_usage: dict[str, int] = field(default_factory=dict)
+    response_identity: dict[str, Any] = field(default_factory=dict)
 
     def reset(self, provider: str | None = None) -> None:
         self.provider = provider
         self.provider_session_id = None
         self.messages.clear()
         self.token_usage.clear()
+        self.response_identity.clear()

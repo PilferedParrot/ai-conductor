@@ -180,6 +180,9 @@ class ProviderRunOrchestrator:
         if mode not in {"technical", "chat"}:
             raise ValueError("run mode must be technical or chat")
         if mode == "chat":
+            from .adapters import adapter_for
+            if not adapter_for(provider, run_config).capabilities.chat:
+                raise ValueError("This provider supports Work only; read-only Chat is not yet supported.")
             if provider == "codex":
                 provider_config["reasoning_effort"] = str(
                     self.config.get("web", {}).get("chat_reasoning_effort") or "low"
@@ -190,6 +193,10 @@ class ProviderRunOrchestrator:
                 provider_config["permission_mode"] = "plan"
             elif provider == "gemini":
                 provider_config["approval_mode"] = "plan"
+            elif provider == "antigravity":
+                provider_config["mode"] = "plan"
+                provider_config["read_only"] = True
+                provider_config["additional_dirs"] = []
             else:
                 provider_config["read_only"] = True
                 provider_config["additional_dirs"] = []

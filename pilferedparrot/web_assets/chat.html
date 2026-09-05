@@ -32,26 +32,23 @@
         <nav class="chat-list" id="chatHistoryList" aria-label="Chat history"></nav>
       </section>
 
-      <section class="chat-model-card" aria-labelledby="chatModelHeading">
-        <label id="chatModelHeading" for="chatModelSelect">Chat model</label>
-        <select id="chatModelSelect" aria-label="Chat model" disabled>
-          <option value="">Loading provider models…</option>
-        </select>
-        <p>Independent, read-only Chat instance</p>
-      </section>
-
-      <button class="chrome-theme-button" id="notificationPreferences" type="button" disabled
-              title="Manage desktop notifications">
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>
-        </svg>
-        <span id="notificationPreferencesLabel">Desktop notifications</span>
-      </button>
-
-      <section class="chat-window-context" aria-labelledby="chatContextHeading">
-        <div class="history-heading" id="chatContextHeading">Context window</div>
+      <details class="chat-window-context sidebar-disclosure" id="contextDetails">
+        <summary id="chatContextHeading">Context window <span id="contextSummary">No data yet</span></summary>
         <div class="context-pie-card" id="chatContext"></div>
-      </section>
+      </details>
+
+      <details class="sidebar-disclosure" id="preferencesDetails">
+        <summary>Preferences</summary>
+        <button class="chrome-theme-button" id="notificationPreferences" type="button" disabled
+                title="Manage desktop notifications">
+          <svg viewBox="0 0 24 24" aria-hidden="true">
+            <path d="M18 9a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>
+          </svg>
+          <span id="notificationPreferencesLabel">Desktop notifications</span>
+        </button>
+
+      </details>
+
     </aside>
 
     <div class="pane-resizer chat-sidebar-resizer" id="chatResizer" role="separator"
@@ -65,14 +62,19 @@
                 aria-controls="chatWindowSidebar" aria-expanded="false">☰</button>
         <div>
           <div class="chat-title" id="chatThreadTitle">Chat</div>
-          <div class="chat-subtitle" id="chatIdentity">GPT-5.6 Terra</div>
+          <div class="chat-subtitle" id="chatIdentity">Separate, read-only conversation</div>
         </div>
       </header>
       <section class="chat-messages" id="chatMessages" aria-live="polite"></section>
       <footer class="chat-composer-wrap">
+        <div id="providerUpdate" class="provider-update" role="status" hidden></div>
         <form class="chat-composer" id="chatComposer">
           <textarea id="chatPrompt" rows="1" maxlength="40000" disabled placeholder="Ask Chat…" aria-label="Message Chat"></textarea>
           <div class="chat-composer-bar">
+            <div class="composer-controls">
+              <label class="composer-setting"><span>Model</span><select id="chatModelSelect" aria-label="Chat model" disabled><option value="">Loading provider models…</option></select></label>
+              <label class="composer-setting" id="reasoningControl" hidden><span>Reasoning</span><select id="chatReasoningSelect" aria-label="Chat reasoning effort" disabled></select></label>
+            </div>
             <button type="button" class="cancel-run hidden" id="cancelChat"
                     aria-label="Cancel Chat response" title="Cancel Chat response">■</button>
             <button type="submit" class="send-button" id="sendChat" aria-label="Send to Chat" disabled>↑</button>
@@ -81,8 +83,10 @@
       </footer>
     </section>
   </main>
-  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+  <div class="toast" id="toast" popover="manual" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="/markdown.js"></script>
+  <script src="/identity.js"></script>
+  <script src="/provider-updates.js"></script>
   <script src="/chat.js"></script>
 </body>
 </html>

@@ -65,6 +65,7 @@ HELP = """Commands:
   /codex            switch to a fresh Codex conversation
   /claude           switch to a fresh Claude Code conversation
   /gemini           switch to a fresh Google Gemini conversation
+  /antigravity      switch to a fresh Google Antigravity conversation
   /budget           refresh provider status and included usage
   /status           show the working directory and provider
   /help             show this help
@@ -77,7 +78,7 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
     if provider not in PROVIDERS:
         provider = "codex"
     conversation = Conversation(provider=provider)
-    print(f"PilferedParrot {__version__} — direct Qwen, Codex, Claude, or Gemini sessions.")
+    print(f"PilferedParrot {__version__} — direct local and cloud model sessions.")
     print("Type /help for commands. Ctrl-D exits.")
     while True:
         try:
@@ -94,7 +95,7 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
             if command == "/new":
                 conversation.reset(provider)
                 print(f"new {provider} conversation")
-            elif command in ("/qwen", "/codex", "/claude", "/gemini"):
+            elif command[1:] in PROVIDERS:
                 provider = command[1:]
                 conversation.reset(provider)
                 print(f"new {provider} conversation")
@@ -115,7 +116,7 @@ def repl(config: dict[str, Any], cwd: Path) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Direct interface for local Qwen, OpenAI Codex, Claude Code, and Gemini",
+        description="Direct interface for local models, Codex, Claude Code, Gemini, and Antigravity",
     )
     parser.add_argument("--version", action="version", version=f"PilferedParrot {__version__}")
     parser.add_argument("--config", help="path to a JSON configuration file")

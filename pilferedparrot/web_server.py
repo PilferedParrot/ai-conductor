@@ -29,7 +29,7 @@ from urllib.request import urlopen
 ASSET_ROOT = Path(__file__).resolve().parent / "web_assets"
 RUNTIME_ROOT = Path(__file__).resolve().parent
 ASSET_NAMES = (
-    "index.html", "chat.html", "app.css", "markdown.js", "app.js", "chat.js", "icon.svg",
+    "index.html", "chat.html", "app.css", "markdown.js", "identity.js", "provider-updates.js", "app.js", "chat.js", "icon.svg",
     "pilferedparrot-icon.png", "company-logo.png", "company-logo-dark.png",
 )
 API_GENERATION = 20
@@ -46,6 +46,7 @@ class ServerApp(Protocol):
     def current_chat_state(self) -> Any: ...
     def budgets(self) -> dict[str, Any]: ...
     def poll_provider_models(self, provider: str) -> Any: ...
+    def provider_update(self, provider: str) -> Any: ...
     def browser_theme(self) -> Any: ...
     def chrome_theme_background(self) -> tuple[bytes, str] | None: ...
     def create_chat(self, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
@@ -59,6 +60,7 @@ class ServerApp(Protocol):
     def reset_chat(self, payload: dict[str, Any], *, provider: str | None) -> Any: ...
     def set_chat_model(self, payload: dict[str, Any], *, provider: str | None) -> Any: ...
     def set_chat_context_window(self, payload: dict[str, Any], *, provider: str | None) -> Any: ...
+    def set_chat_reasoning_effort(self, payload: dict[str, Any], *, provider: str | None) -> Any: ...
     def open_chat_window(self, url: str, payload: dict[str, Any]) -> Any: ...
     def open_provider_window(self, url: str, payload: dict[str, Any]) -> Any: ...
     def provider_auth_action(self, provider: str, action: str) -> Any: ...
@@ -69,6 +71,8 @@ class ServerApp(Protocol):
         window_provider: str | None,
     ) -> Any: ...
     def set_context_window(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
+    def set_reasoning_effort(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
+    def activate_chat(self, chat_id: str, *, window_id: str) -> Any: ...
     def cancel_message(self, chat_id: str, *, window_id: str) -> Any: ...
     def launch_terminal_command(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> None: ...
     def delete_chat(self, chat_id: str, *, window_id: str) -> None: ...
@@ -397,6 +401,10 @@ def make_handler(
                 self._asset("app.js", "text/javascript; charset=utf-8")
             elif path == "/markdown.js":
                 self._asset("markdown.js", "text/javascript; charset=utf-8")
+            elif path == "/identity.js":
+                self._asset("identity.js", "text/javascript; charset=utf-8")
+            elif path == "/provider-updates.js":
+                self._asset("provider-updates.js", "text/javascript; charset=utf-8")
             elif path == "/chat.js":
                 self._asset("chat.js", "text/javascript; charset=utf-8")
             elif path == "/icon.svg":
@@ -456,6 +464,14 @@ def make_handler(
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
                 else:
                     self._json(app.poll_provider_models(provider))
+            elif re.fullmatch(r"/api/providers/[^/]+/update", path):
+                provider = path.split("/")[3]
+                context = self._request_capability_context()
+                if context is None or context.get("scope") not in {"dashboard", "chat"} \
+                        or context.get("provider") and context["provider"] != provider:
+                    self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
+                else:
+                    self._json(app.provider_update(provider))
             elif path == "/api/browser/theme":
                 if self._request_capability_scope() not in {"dashboard", "chat"}:
                     self._json({"error": "window authorization failed"}, HTTPStatus.FORBIDDEN)
@@ -536,6 +552,10 @@ def make_handler(
                     self._json(app.set_chat_context_window(
                         payload, provider=window_provider,
                     ))
+                elif path == "/api/chat/reasoning":
+                    self._json(app.set_chat_reasoning_effort(
+                        payload, provider=window_provider,
+                    ))
                 elif path == "/api/chat/window":
                     host = self.headers.get("Host", "")
                     self._json(app.open_chat_window(f"http://{host}/chat", {
@@ -579,6 +599,12 @@ def make_handler(
                     self._json(app.set_context_window(
                         parts[2], payload, window_id=window_id,
                     ))
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "reasoning":
+                    self._json(app.set_reasoning_effort(
+                        parts[2], payload, window_id=window_id,
+                    ))
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "activate":
+                    self._json(app.activate_chat(parts[2], window_id=window_id))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "cancel":
                     self._json(app.cancel_message(parts[2], window_id=window_id))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "terminal":

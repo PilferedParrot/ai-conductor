@@ -1,0 +1,60 @@
+name: Feedback
+description: Share an idea or experience with the Linux preview.
+title: "[Feedback] "
+labels:
+  - feedback
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please remove API keys, access tokens, file contents, prompts, chat transcripts, and other private data before posting.
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Include Linux distribution, desktop session, and whether you use X11 or Wayland.
+      placeholder: Linux Mint 22, Cinnamon, X11
+    validations:
+      required: true
+  - type: input
+    id: provider
+    attributes:
+      label: Provider
+      description: Name the provider, CLI or compatible endpoint, and model if relevant.
+      placeholder: Claude Code, Antigravity, LM Studio, or another provider
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: PilferedParrot version
+      description: Include the release tag or commit and relevant CLI/browser versions.
+      placeholder: v0.5.0; Chrome 140; provider CLI version
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Concise reproduction or context
+      description: Share the shortest useful sequence or context, using placeholders for private paths or data.
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected experience
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual experience
+  - type: textarea
+    id: feedback
+    attributes:
+      label: Additional feedback
+      description: Describe the idea, improvement, or context that would make the preview more useful.
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitized diagnostics
+      description: Optional logs or error text. Remove keys, tokens, prompts, chat data, private paths, and project contents.
+      render: text

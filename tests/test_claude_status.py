@@ -66,6 +66,26 @@ class ClaudeStatusNormalizationTests(unittest.TestCase):
         self.assertEqual(status.auth_status, AUTH_SIGNED_OUT)
         self.assertEqual(status.reachability, UNREACHABLE)
 
+    def test_signed_out_accepts_current_cli_nonzero_exit_with_explicit_false(self):
+        status = self._read(1, json.dumps({
+            "loggedIn": False,
+            "authMethod": "none",
+            "apiProvider": "firstParty",
+        }))
+        self.assertFalse(status.available)
+        self.assertEqual(status.status, STATUS_SIGNED_OUT)
+        self.assertEqual(status.auth_status, AUTH_SIGNED_OUT)
+        self.assertEqual(status.reachability, UNREACHABLE)
+
+    def test_non_json_cli_failure_stays_unknown(self):
+        self.assert_unknown(self._read(1, "authentication backend failed", "failure"))
+
+    def test_nonzero_logged_in_json_stays_unknown(self):
+        self.assert_unknown(self._read(1, json.dumps({"loggedIn": True})))
+
+    def test_signed_out_unexpected_nonzero_exit_stays_unknown(self):
+        self.assert_unknown(self._read(2, json.dumps({"loggedIn": False})))
+
     def test_expiration_like_failure_is_unknown(self):
         status = self._read(
             1,

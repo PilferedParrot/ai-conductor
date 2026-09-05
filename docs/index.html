@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PilferedParrot 0.5.0 — a local browser for coding engines</title>
+  <meta name="description" content="PilferedParrot is a local Linux browser interface for coding engines and compatible model APIs. Choose your provider, keep work in one window, and chat separately.">
+  <link rel="canonical" href="https://pilferedparrot.github.io/ai-conductor/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="PilferedParrot 0.5.0 — local AI work, your provider">
+  <meta property="og:description" content="A local browser interface for coding engines and compatible model APIs, with explicit provider choice and a separate read-only Chat.">
+  <meta property="og:url" content="https://pilferedparrot.github.io/ai-conductor/">
+  <meta property="og:image" content="https://pilferedparrot.github.io/ai-conductor/assets/pilferedparrot-icon.png">
+  <meta name="theme-color" content="#f5efdf">
+  <link rel="icon" href="assets/icon.svg" type="image/svg+xml">
+  <style>
+    :root { --cream:#f5efdf; --paper:#fffaf0; --ink:#1e2522; --muted:#5f6861; --orange:#df5a2b; --orange-dark:#a9361b; --teal:#1e7770; --line:#d9d0bd; --shadow:0 22px 55px rgba(43,38,25,.12); }
+    * { box-sizing:border-box; }
+    html { scroll-behavior:smooth; }
+    body { margin:0; background:var(--cream); color:var(--ink); font-family:Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height:1.55; }
+    a { color:inherit; }
+    a:focus-visible, button:focus-visible, summary:focus-visible { outline:3px solid #f0a849; outline-offset:4px; border-radius:4px; }
+    .wrap { width:min(1120px, calc(100% - 40px)); margin:auto; }
+    .topbar { display:flex; align-items:center; justify-content:space-between; padding:22px 0; }
+    .brand { display:inline-flex; align-items:center; gap:11px; text-decoration:none; font-weight:800; letter-spacing:-.02em; }
+    .brand img { width:34px; height:34px; object-fit:contain; }
+    nav { display:flex; align-items:center; gap:24px; font-size:.9rem; color:var(--muted); }
+    nav a { text-decoration:none; }
+    nav a:hover { color:var(--ink); }
+    .button { display:inline-flex; align-items:center; justify-content:center; gap:8px; min-height:46px; padding:10px 18px; border:1px solid transparent; border-radius:999px; text-decoration:none; font-weight:750; transition:transform .15s ease, background .15s ease; }
+    .button:hover { transform:translateY(-2px); }
+    .button.primary { background:var(--orange-dark); color:white; box-shadow:0 8px 18px rgba(179,66,30,.2); }
+    .button.primary:hover { background:var(--orange-dark); }
+    .button.ghost { border-color:var(--line); background:rgba(255,250,240,.45); }
+    .button.ghost:hover { background:var(--paper); }
+    .hero { display:grid; grid-template-columns:1.03fr .97fr; gap:66px; align-items:center; padding:74px 0 92px; }
+    .eyebrow { display:inline-flex; align-items:center; gap:8px; color:var(--teal); font-size:.78rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; }
+    .eyebrow::before { content:""; width:24px; height:2px; background:var(--orange); }
+    h1 { max-width:680px; margin:18px 0 20px; font-size:clamp(2.7rem, 6vw, 5.4rem); line-height:.98; letter-spacing:-.065em; }
+    .hero p { max-width:570px; margin:0; color:var(--muted); font-size:1.16rem; }
+    .actions { display:flex; flex-wrap:wrap; gap:12px; margin-top:30px; }
+    .micro { margin-top:17px !important; font-size:.84rem !important; }
+    .micro a { color:var(--teal); font-weight:700; }
+    .hero-art { position:relative; }
+    .hero-art::before { content:""; position:absolute; inset:-28px -22px 32px 32px; border:1px solid #c6bda9; border-radius:34px; transform:rotate(3deg); }
+    .hero-art img { position:relative; display:block; width:100%; max-width:420px; margin:auto; border:1px solid var(--line); border-radius:25px; background:var(--paper); box-shadow:var(--shadow); }
+    .section { padding:94px 0; border-top:1px solid var(--line); }
+    .section-heading { max-width:650px; margin-bottom:38px; }
+    h2 { margin:10px 0 12px; font-size:clamp(2rem, 4vw, 3.35rem); line-height:1.04; letter-spacing:-.05em; }
+    .section-heading p { margin:0; color:var(--muted); font-size:1.06rem; }
+    .grid-3 { display:grid; grid-template-columns:repeat(3, 1fr); gap:18px; }
+    .card { padding:26px; border:1px solid var(--line); border-radius:18px; background:rgba(255,250,240,.62); }
+    .card .number { color:var(--orange); font-size:.8rem; font-weight:850; letter-spacing:.14em; }
+    h3 { margin:12px 0 8px; font-size:1.23rem; letter-spacing:-.02em; }
+    .card p { margin:0; color:var(--muted); font-size:.96rem; }
+    .split { display:grid; grid-template-columns:minmax(0, 1fr) minmax(0, 1fr); gap:68px; align-items:start; }
+    .feature-list { display:grid; gap:15px; margin:25px 0 0; padding:0; list-style:none; }
+    .feature-list li { display:flex; gap:13px; align-items:flex-start; }
+    .feature-list li::before { content:"✓"; display:grid; place-items:center; flex:0 0 23px; width:23px; height:23px; border-radius:50%; background:#cce5de; color:var(--teal); font-weight:900; margin-top:2px; }
+    .feature-list strong { display:block; }
+    .feature-list span { display:block; color:var(--muted); font-size:.93rem; }
+    .preview { margin-top:48px; }
+    figure { margin:0; }
+    .preview img { display:block; width:100%; border:1px solid var(--line); border-radius:20px; background:#e8dfcc; box-shadow:var(--shadow); }
+    figcaption { margin-top:11px; color:var(--muted); font-size:.86rem; }
+    .terminal { margin:0; padding:24px; overflow:auto; border-radius:15px; background:#202926; color:#f5efdf; font: .9rem/1.8 ui-monospace, SFMono-Regular, Menlo, monospace; box-shadow:var(--shadow); }
+    .terminal .dim { color:#a7b7ab; }
+    .terminal .prompt { color:#f4a25b; user-select:none; }
+    .note { margin-top:18px; padding:15px 17px; border-left:3px solid var(--teal); color:var(--muted); background:rgba(204,229,222,.38); font-size:.9rem; }
+    .status { display:grid; grid-template-columns:1fr 1fr; gap:18px; }
+    .status .card { background:var(--paper); }
+    .status h3 { display:flex; gap:9px; align-items:center; }
+    .dot { width:9px; height:9px; border-radius:50%; background:var(--teal); }
+    .dot.amber { background:#c48124; }
+    .wide-cta { display:flex; align-items:center; justify-content:space-between; gap:25px; padding:38px; border-radius:23px; background:var(--teal); color:#f7f3e8; }
+    .wide-cta h2 { margin:0; font-size:clamp(1.8rem, 4vw, 2.7rem); }
+    .wide-cta p { max-width:550px; margin:10px 0 0; color:#cce5de; }
+    .wide-cta .button { background:#f7f3e8; color:var(--teal); }
+    footer { padding:30px 0 46px; color:var(--muted); font-size:.88rem; }
+    footer .footer-row { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:20px; border-top:1px solid var(--line); padding-top:24px; }
+    footer a { color:var(--teal); }
+    @media (max-width:800px) { nav a:not(.button) { display:none; } .hero { grid-template-columns:1fr; gap:52px; padding:55px 0 75px; } .hero-art { max-width:450px; } .grid-3, .split, .status { grid-template-columns:1fr; } .section { padding:70px 0; } .wide-cta { align-items:flex-start; flex-direction:column; padding:28px; } }
+    @media (max-width:500px) { .wrap { width:min(100% - 28px, 1120px); } .topbar { padding:16px 0; } .brand span { font-size:.93rem; } h1 { font-size:clamp(2.6rem, 14vw, 4rem); } .button { width:100%; } .actions { width:100%; } .hero-art::before { inset:-16px 10px 22px 17px; } .card { padding:22px; } }
+    @media (prefers-reduced-motion:reduce) { html { scroll-behavior:auto; } *, *::before, *::after { transition:none !important; } .button:hover { transform:none; } }
+  </style>
+</head>
+<body>
+  <header class="wrap topbar">
+    <a class="brand" href="#top" aria-label="PilferedParrot home"><img src="assets/pilferedparrot-icon.png" alt=""><span>PilferedParrot</span></a>
+    <nav aria-label="Primary navigation"><a href="#how">How it works</a><a href="#providers">Providers</a><a class="button primary" href="https://github.com/PilferedParrot/ai-conductor/releases/tag/v0.5.0">Get 0.5.0</a></nav>
+  </header>
+  <main id="top">
+    <section class="wrap hero">
+      <div><span class="eyebrow">Linux preview · 0.5.0</span><h1>Your models.<br><em>One place to work.</em></h1><p>PilferedParrot is a local browser interface for coding engines and compatible model APIs. Pick the provider you want, keep technical work in Work, and open a separate read-only Chat when you need it.</p><div class="actions"><a class="button primary" href="https://github.com/PilferedParrot/ai-conductor/releases/tag/v0.5.0">Download the preview <span aria-hidden="true">↗</span></a><a class="button ghost" href="https://github.com/PilferedParrot/ai-conductor">View the source</a></div><p class="micro">Apache 2.0 · Linux · Python 3.12+ · no third-party Python packages</p></div>
+      <div class="hero-art"><img src="assets/pilferedparrot-icon.png" alt="PilferedParrot parrot mark"></div>
+    </section>
+    <section class="section" id="how"><div class="wrap"><div class="section-heading"><span class="eyebrow">A deliberate split</span><h2>Work stays focused.<br>Chat stays separate.</h2><p>You choose a provider and its model. PilferedParrot keeps work sessions and casual questions in separate windows, with your conversation history saved locally.</p></div><div class="grid-3"><article class="card"><span class="number">01</span><h3>Choose your destination</h3><p>Open Providers to see connection state, choose a model, and start a fixed-provider window. Add compatible APIs with a preset or your own endpoint.</p></article><article class="card"><span class="number">02</span><h3>Do the real work</h3><p>Work shows live provider commentary, commands, tool completion events, context use, and persistent provider session history in one local UI.</p></article><article class="card"><span class="number">03</span><h3>Ask a clean question</h3><p>Open Chat in its own floating window for a separate read-only provider session. Ask about an idea without adding another turn to your Work conversation.</p></article></div></div></section>
+    <section class="section"><div class="wrap"><div class="split"><div><span class="eyebrow">What ships in 0.5.0</span><h2>Your sessions, side by side.</h2><ul class="feature-list"><li><div><strong>Native and compatible providers</strong><span>Codex, Claude, Gemini, Google Antigravity Work, Local Qwen, plus OpenAI-compatible endpoints including OpenRouter, Mistral/Devstral, and LM Studio.</span></div></li><li><div><strong>Provider-owned access</strong><span>Sign-in remains with the official CLI or endpoint. API credentials stay in environment variables. Native CLIs manage their own sign-in.</span></div></li><li><div><strong>Local state and safe detail</strong><span>Sessions persist locally. Response details show requested destination and compatible server IDs without claiming they prove loaded weights.</span></div></li><li><div><strong>Antigravity Work only</strong><span>Antigravity supports streamed Work progress, native continuation, model discovery, and cancellation; read-only Chat is disabled for it.</span></div></li></ul></div><div id="providers"><div class="status"><article class="card"><h3><span class="dot"></span>Live-tested paths</h3><p>Codex, Local Qwen, Antigravity, and LM Studio passed contained live checks on Linux Mint/X11. The automated suite passed all 440 tests, including browser coverage. <a href="https://github.com/PilferedParrot/ai-conductor/blob/v0.5.0/docs/release-readiness.md">Read the validation</a>.</p></article><article class="card"><h3><span class="dot amber"></span>Account prerequisites</h3><p>OpenRouter, Mistral/Devstral, and other remote APIs still need your own credential and plan access. Their offline protocol tests passed; no live model certification was claimed without an account.</p></article></div><div class="note">Local and compatible API shell tools require <a href="https://github.com/containers/bubblewrap">Bubblewrap</a>. Local Qwen needs no account. Provider limits, pricing, and native permission rules remain yours to check.</div></div></div><div class="preview"><figure><img src="assets/work-preview.png" alt="PilferedParrot Work interface preview" loading="lazy"><figcaption>Interface preview using a synthetic conversation.</figcaption></figure></div></div></section>
+    <section class="section"><div class="wrap"><div class="section-heading"><span class="eyebrow">Start locally</span><h2>Four commands to a first window.</h2><p>Use Python 3.12 or newer on Linux; Chrome or Chromium gives you a dedicated app window. Then open Providers to choose an installed, authenticated CLI or add a compatible endpoint.</p></div><pre class="terminal" aria-label="Installation commands">git clone --branch v0.5.0 https://github.com/PilferedParrot/ai-conductor.git PilferedParrot
+cd PilferedParrot
+cp config.example.json config.json
+./bin/pilferedparrot</pre><p class="note">The interface runs on this computer at <strong>http://127.0.0.1:8765</strong>. Prompts and tool results go to the provider you choose. Start a local model server separately if using one; provider access and usage costs are separate from this open-source app.</p></div></section>
+    <section class="section"><div class="wrap"><div class="wide-cta"><div><h2>Try the Linux preview.</h2><p>Read the release notes, inspect the source, and tell us what made your first session easier or harder.</p></div><a class="button" href="https://github.com/PilferedParrot/ai-conductor/issues/new/choose">Give feedback <span aria-hidden="true">↗</span></a></div></div></section>
+  </main>
+  <footer><div class="wrap footer-row"><span>© PilferedParrot · Apache 2.0</span><span><a href="https://github.com/PilferedParrot/ai-conductor/releases/tag/v0.5.0">Release notes</a> · <a href="https://github.com/PilferedParrot/ai-conductor/issues/new/choose">Issues</a> · <a href="https://github.com/PilferedParrot/ai-conductor">GitHub</a></span></div></footer>
+</body>
+</html>

@@ -1,0 +1,74 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+    cat <<'EOF'
+Usage: bin/check-browser-ui [--setup]
+
+Run the Playwright browser test suite with the persistent user-local environment.
+
+Options:
+  --setup  Create or update the environment and install Chromium before testing.
+  --help   Show this help text.
+
+The environment defaults to ${XDG_DATA_HOME:-$HOME/.local/share}/ppi-playwright.
+Set PPI_PLAYWRIGHT_ENV to use a different environment path.
+EOF
+}
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+repo_root=$(dirname -- "$script_dir")
+cd -- "$repo_root"
+
+if (( $# > 1 )); then
+    printf 'error: expected at most one option\n\n' >&2
+    usage >&2
+    exit 2
+fi
+
+setup=false
+case "${1:-}" in
+    "") ;;
+    --setup) setup=true ;;
+    --help|-h)
+        usage
+        exit 0
+        ;;
+    *)
+        printf 'error: unknown option: %s\n\n' "$1" >&2
+        usage >&2
+        exit 2
+        ;;
+esac
+
+if [[ "$setup" == true ]]; then
+    if ! command -v python3 >/dev/null 2>&1; then
+        printf 'error: --setup requires python3 on PATH. Install Python 3.12 or later and retry.\n' >&2
+        exit 1
+    fi
+
+    env_dir=${PPI_PLAYWRIGHT_ENV:-${XDG_DATA_HOME:-$HOME/.local/share}/ppi-playwright}
+    mkdir -p -- "$(dirname -- "$env_dir")"
+    if [[ ! -x "$env_dir/bin/python" ]]; then
+        python3 -m venv "$env_dir"
+    fi
+    "$env_dir/bin/python" -m pip install -r requirements-browser.txt
+    "$env_dir/bin/python" -m playwright install chromium
+else
+    env_dir=${PPI_PLAYWRIGHT_ENV:-${XDG_DATA_HOME:-$HOME/.local/share}/ppi-playwright}
+fi
+
+if [[ ! -x "$env_dir/bin/python" ]]; then
+    printf 'error: browser test environment is missing: %s\n' "$env_dir" >&2
+    printf '       Run %s --setup, or set PPI_PLAYWRIGHT_ENV to an existing venv.\n' "$0" >&2
+    exit 1
+fi
+
+if ! "$env_dir/bin/python" -c 'import playwright' >/dev/null 2>&1; then
+    printf 'error: Playwright is not installed in %s\n' "$env_dir" >&2
+    printf '       Run %s --setup, or install requirements-browser.txt in that venv.\n' "$0" >&2
+    exit 1
+fi
+
+PYTHONDONTWRITEBYTECODE=1 PILFEREDPARROT_REQUIRE_PLAYWRIGHT=1 \
+    "$env_dir/bin/python" -m unittest discover -s tests -p 'test_*browser*.py' -v

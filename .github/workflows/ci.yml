@@ -89,4 +89,4 @@ jobs:
         run: python -m playwright install --with-deps chromium
 
       - name: Run browser end-to-end tests
-        run: python -m unittest discover -s tests -p 'test_browser_*.py' -v
+        run: python -m unittest discover -s tests -p 'test_*browser*.py' -v

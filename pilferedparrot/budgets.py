@@ -295,34 +295,37 @@ def read_claude_status(config: dict[str, Any]) -> ProviderBudget:
             usage_status=USAGE_UNSUPPORTED, usage_note=CLAUDE_USAGE_UNSUPPORTED_NOTE,
         )
     # The supported JSON contract exposes ``loggedIn``.  Do not inspect or
-    # retain account details, error prose, stdout, or stderr.  In particular,
-    # the contract has no reliable token-expiration state, so every nonzero
-    # result is unknown even if its untrusted payload resembles signed-out JSON.
-    if completed.returncode != 0:
-        return ProviderBudget(
-            "claude", False, status=STATUS_AUTH_UNVERIFIED,
-            note=f"auth unverifiable (`claude auth status` exited {completed.returncode})",
-            auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
-            usage_status=USAGE_UNSUPPORTED, usage_note=CLAUDE_USAGE_UNSUPPORTED_NOTE,
-        )
+    # retain account details, error prose, stdout, or stderr.  Current Claude
+    # CLI versions return exit 1 for a normal signed-out result, so parse the
+    # explicit boolean before treating a nonzero exit as an unverifiable failure.
     try:
         parsed = json.loads(completed.stdout or "{}")
     except json.JSONDecodeError:
         parsed = {}
     payload = parsed if isinstance(parsed, dict) else {}
     logged_in = payload.get("loggedIn") is True
-    if logged_in:
+    if logged_in and completed.returncode == 0:
         return ProviderBudget(
             "claude", True,
             note="Claude CLI reports signed in",
             auth_status=AUTH_SIGNED_IN, reachability=REACHABLE,
             usage_status=USAGE_UNSUPPORTED, usage_note=CLAUDE_USAGE_UNSUPPORTED_NOTE,
         )
-    if payload.get("loggedIn") is False:
+    if payload.get("loggedIn") is False and (
+        completed.returncode == 0
+        or (completed.returncode == 1 and "error" not in payload)
+    ):
         return ProviderBudget(
             "claude", False, status=STATUS_SIGNED_OUT,
             note="signed out -- use Sign in to Claude",
             auth_status=AUTH_SIGNED_OUT, reachability=UNREACHABLE,
+            usage_status=USAGE_UNSUPPORTED, usage_note=CLAUDE_USAGE_UNSUPPORTED_NOTE,
+        )
+    if completed.returncode != 0:
+        return ProviderBudget(
+            "claude", False, status=STATUS_AUTH_UNVERIFIED,
+            note=f"auth unverifiable (`claude auth status` exited {completed.returncode})",
+            auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
             usage_status=USAGE_UNSUPPORTED, usage_note=CLAUDE_USAGE_UNSUPPORTED_NOTE,
         )
     return ProviderBudget(
@@ -408,20 +411,18 @@ def collect_budgets(config: dict[str, Any]) -> dict[str, ProviderBudget]:
             return read_codex_budget(config)
         if provider == "claude":
             return read_claude_status(config)
-        if provider == "gemini":
+        if provider in {"gemini", "antigravity"}:
             from .adapters import adapter_for
-            adapter = adapter_for("gemini", config)
+            adapter = adapter_for(provider, config)
             installed = adapter.available()
-            authenticated = adapter.authentication() if installed else None
+            label = "Antigravity" if provider == "antigravity" else "Gemini"
             return ProviderBudget(
-                "gemini", installed and authenticated is not False,
-                status=STATUS_OK if installed else STATUS_CLI_MISSING,
-                note=("Gemini CLI is ready" if authenticated is True else
-                      "Gemini CLI found; sign-in will be checked when used" if installed else
-                      "Gemini CLI not found"),
-                auth_status=AUTH_SIGNED_IN if authenticated is True else
-                            AUTH_SIGNED_OUT if authenticated is False else AUTH_UNKNOWN,
-                reachability=REACHABLE if installed and authenticated is True else UNREACHABLE,
+                provider, installed,
+                status=STATUS_AUTH_UNVERIFIED if installed else STATUS_CLI_MISSING,
+                note=(f"{label} CLI found; account access will be checked when used"
+                      if installed else f"{label} CLI not found"),
+                auth_status=AUTH_UNKNOWN,
+                reachability=UNREACHABLE,
             )
         return read_compatible_status(provider, config)
 

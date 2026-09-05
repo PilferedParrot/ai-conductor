@@ -1,0 +1,273 @@
+#!/usr/bin/env python3
+"""Opt-in smoke check for one OpenAI-compatible coding provider."""
+from __future__ import annotations
+
+import argparse
+import io
+import json
+import os
+import secrets
+import sys
+import tempfile
+import threading
+import time
+from copy import deepcopy
+from contextlib import redirect_stdout
+from pathlib import Path
+from typing import Any, Callable
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(REPO_ROOT))
+
+from pilferedparrot.adapters import ProgressEvent, ProviderAdapter, adapter_for
+from pilferedparrot.config import (
+    DEFAULTS, load_config, redact_configured_secrets, validate_compatible_base_url,
+)
+from pilferedparrot.dispatch import RunCancelled
+from pilferedparrot.model import Conversation
+
+
+PROVIDER_DEFAULTS: dict[str, dict[str, str]] = {
+    "openrouter": {"base_url": "https://openrouter.ai/api/v1", "api_key_env": ""},
+    "mistral": {"base_url": "https://api.mistral.ai/v1", "api_key_env": ""},
+    "lmstudio": {"base_url": "http://127.0.0.1:1234/v1", "api_key_env": ""},
+}
+KNOWN_COMPATIBLE = frozenset({"qwen", "openrouter", "mistral", "lmstudio"})
+NATIVE_PROVIDERS = frozenset({"codex", "claude", "gemini", "antigravity"})
+
+
+def parser() -> argparse.ArgumentParser:
+    result = argparse.ArgumentParser(
+        description=(
+            "Run an opt-in live read/write/tool-continuation/cancellation smoke check. "
+            "The selected provider incurs its normal usage and access costs."
+        ),
+    )
+    result.add_argument("--provider", required=True, help="configured provider ID")
+    result.add_argument("--model", help="exact model ID; no model is guessed")
+    result.add_argument("--base-url", help="OpenAI-compatible API base URL override")
+    result.add_argument("--api-key-env", help="environment variable containing the API key")
+    result.add_argument("--config", help="explicit JSON config path; omitted means built-in defaults")
+    result.add_argument(
+        "--run", action="store_true",
+        help="confirm that this command may make live provider requests",
+    )
+    return result
+
+
+def _provider_config(config: dict[str, Any], provider: str) -> dict[str, Any]:
+    if provider in NATIVE_PROVIDERS:
+        raise ValueError(f"{provider} is a native CLI provider and is not supported by this checker")
+    configured = config.get(provider)
+    if not isinstance(configured, dict):
+        definitions = config.get("provider_definitions")
+        configured = definitions.get(provider) if isinstance(definitions, dict) else None
+    result = deepcopy(configured) if isinstance(configured, dict) else {}
+    result.update({key: value for key, value in PROVIDER_DEFAULTS.get(provider, {}).items()
+                   if not result.get(key)})
+    if provider not in KNOWN_COMPATIBLE and not isinstance(configured, dict):
+        raise ValueError(f"unknown compatible provider: {provider}")
+    if configured and configured.get("adapter") not in (None, "openai_compatible"):
+        raise ValueError(f"{provider} is not configured as an OpenAI-compatible provider")
+    result["adapter"] = "openai_compatible"
+    # A smoke check always owns a fresh temporary workspace and may not inherit
+    # paths that expose a personal project or home directory.
+    result.update({
+        "additional_dirs": [],
+        "allow_home_workspace": False,
+        "default_workspace": None,
+        "auto_start": False,
+        "start_command": [],
+        "max_tool_turns": 8,
+        "agent_max_tokens": 512,
+        "agent_request_timeout_seconds": 20,
+        "tool_output_chars": 4_000,
+        "file_limit_bytes": 64_000,
+        "shell_timeout_seconds": 5,
+        "shell_max_timeout_seconds": 5,
+    })
+    return result
+
+
+def build_config(args: argparse.Namespace) -> tuple[dict[str, Any], str]:
+    provider = str(args.provider)
+    if provider in NATIVE_PROVIDERS:
+        raise ValueError(f"{provider} is a native CLI provider and is not supported by this checker")
+    config = deepcopy(DEFAULTS) if not args.config else load_config(args.config)
+    provider_config = _provider_config(config, provider)
+    if args.base_url:
+        provider_config["base_url"] = args.base_url
+    if args.api_key_env is not None:
+        provider_config["api_key_env"] = args.api_key_env
+    provider_config["base_url"] = validate_compatible_base_url(provider_config.get("base_url"))
+    model = args.model or provider_config.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise ValueError("--model is required when the selected provider has no configured model")
+    provider_config["model"] = model.strip()
+    config[provider] = provider_config
+    return config, provider_config["model"]
+
+
+def _result_text(result: Any) -> str:
+    value = getattr(result, "text", result)
+    return value if isinstance(value, str) else str(value)
+
+
+def _run_adapter(
+    adapter: ProviderAdapter, prompt: str, cwd: Path, conversation: Conversation,
+    **kwargs: Any,
+) -> Any:
+    """Keep adapter chatter and upstream error bodies out of the JSON checker output."""
+    try:
+        with redirect_stdout(io.StringIO()):
+            result = adapter.run(prompt, cwd, conversation, **kwargs)
+    except RunCancelled:
+        raise
+    except Exception as error:
+        raise RuntimeError(f"provider request failed ({type(error).__name__})") from None
+    exit_code = getattr(result, "exit_code", 0)
+    try:
+        failed = int(exit_code) != 0
+    except (TypeError, ValueError):
+        failed = True
+    if failed:
+        raise RuntimeError("provider returned a nonzero result")
+    return result
+
+
+def _tool_progress(events: list[ProgressEvent]) -> bool:
+    names = {"read_file", "write_file"}
+    return all(any(event.kind == "tool" and str(name) in event.text for event in events)
+               for name in names)
+
+
+def run_smoke(
+    adapter: ProviderAdapter,
+    provider: str,
+    model: str,
+    cwd: Path,
+    *,
+    cancel_wait_seconds: float = 1.0,
+) -> dict[str, Any]:
+    marker = secrets.token_urlsafe(18)
+    marker_path = cwd / "provider-smoke-marker.txt"
+    verified_path = cwd / "verified.txt"
+    marker_path.write_text(marker, encoding="utf-8")
+    conversation = Conversation(provider=provider)
+    first_events: list[ProgressEvent] = []
+    try:
+        first = _run_adapter(adapter,
+            "Read provider-smoke-marker.txt with read_file, then write its exact contents "
+            "to verified.txt with write_file. Do not use shell.",
+            cwd, conversation, on_progress=first_events.append,
+        )
+        first_text = _result_text(first)
+        if not first_text.strip():
+            raise RuntimeError("provider returned no final reply after the tool checks")
+        contained = (
+            verified_path.is_file()
+            and verified_path.read_text(encoding="utf-8") == marker
+            and _tool_progress(first_events)
+        )
+        if not contained:
+            raise RuntimeError("provider did not complete contained read_file/write_file checks")
+        marker_path.unlink()
+        verified_path.unlink()
+        second = _run_adapter(adapter,
+            "The marker file and verified.txt were deleted. What exact marker did you read? "
+            "Reply with that marker.",
+            cwd, conversation, on_progress=first_events.append,
+        )
+        continuation = marker in _result_text(second)
+        if not continuation:
+            raise RuntimeError("provider did not continue the same conversation with the marker")
+
+        cancel_conversation = Conversation(provider=provider)
+        cancel_event = threading.Event()
+        cancel_events: list[ProgressEvent] = []
+        cancellation_started: list[float] = []
+        outcome: list[Any] = []
+        progress_at_cancel: list[int] = []
+
+        def cancel_progress(event: ProgressEvent) -> None:
+            cancel_events.append(event)
+            if not cancel_event.is_set() and event.kind in {"status", "tool"}:
+                progress_at_cancel.append(len(cancel_events))
+                cancel_event.set()
+                adapter.cancel(cancel_conversation)
+
+        def cancel_fallback() -> None:
+            if not cancel_event.is_set():
+                progress_at_cancel.append(len(cancel_events))
+                cancel_event.set()
+                adapter.cancel(cancel_conversation)
+
+        def submit_cancel() -> None:
+            try:
+                outcome.append(_run_adapter(adapter,
+                    "Begin a long tool-capable coding task and wait for further instructions.",
+                    cwd, cancel_conversation, cancel_event=cancel_event,
+                    on_progress=cancel_progress,
+                ))
+            except BaseException as error:  # report provider cancellation precisely below
+                outcome.append(error)
+
+        cancellation_started.append(time.monotonic())
+        worker = threading.Thread(target=submit_cancel, daemon=True)
+        worker.start()
+        timer = threading.Timer(cancel_wait_seconds, cancel_fallback)
+        timer.start()
+        worker.join(5)
+        timer.cancel()
+        elapsed = time.monotonic() - cancellation_started[0]
+        cancelled = (
+            not worker.is_alive()
+            and elapsed < 5
+            and outcome
+            and isinstance(outcome[0], RunCancelled)
+            and progress_at_cancel
+            and len(cancel_events) == progress_at_cancel[0]
+        )
+        if not cancelled:
+            raise RuntimeError("provider cancellation was not observed promptly")
+        return {
+            "ok": True,
+            "provider": provider,
+            "model": model,
+            "checks": {
+                "reply": bool(first_text.strip()),
+                "contained_read_write_tools": True,
+                "second_user_continuation": True,
+                "cancellation": True,
+            },
+        }
+    finally:
+        for path in (marker_path, verified_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+
+
+def main(argv: list[str] | None = None, *, adapter_factory: Callable[..., ProviderAdapter] = adapter_for) -> int:
+    args = parser().parse_args(argv)
+    if not args.run:
+        print(json.dumps({"ok": False, "error": "live check requires --run"}, sort_keys=True))
+        return 2
+    try:
+        config, model = build_config(args)
+        with tempfile.TemporaryDirectory(prefix="pilferedparrot-provider-check-") as directory:
+            provider = str(args.provider)
+            adapter = adapter_factory(provider, config)
+            summary = run_smoke(adapter, provider, model, Path(directory))
+        print(json.dumps(summary, sort_keys=True))
+        return 0
+    except Exception as error:
+        config = locals().get("config", {})
+        detail = redact_configured_secrets(config, error)
+        print(json.dumps({"ok": False, "error": detail}, sort_keys=True))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

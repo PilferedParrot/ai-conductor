@@ -30,6 +30,7 @@ from .config import (
     effective_model, expanded_path,
     load_config, model_catalog, model_context_window, model_effective_context_window_percent,
     model_max_context_window, open_compatible_url, resolve_command,
+    redact_configured_secrets,
     validate_compatible_base_url,
 )
 from .dispatch import RunCancelled, RunResult, capture_dispatch
@@ -39,6 +40,7 @@ from .model import (
     provider_catalog, provider_ids,
 )
 from .qwen import AGENT_SYSTEM_PROMPT, TOOL_DEFINITIONS, ensure_qwen
+from .response_identity import configured_identity
 from .web_persistence import (
     DashboardModelStore, PersistentChatStore, chat_store_path,
     dashboard_capability_path, legacy_chat_store_path, load_dashboard_models,
@@ -78,9 +80,27 @@ PROVIDER_TEMPLATES: tuple[dict[str, str], ...] = (
     },
     {
         "id": "openrouter", "label": "OpenRouter", "adapter": "openai_compatible",
-        "description": "Hundreds of model families through one OpenAI-compatible API.",
+        "description": "DeepSeek, GLM, and other model families. Choose a model with tool support; pricing and access vary by model.",
         "base_url": "https://openrouter.ai/api/v1",
         "api_key_env": "OPENROUTER_API_KEY", "model": "",
+    },
+    {
+        "id": "google-ai-studio", "label": "Google AI Studio / Gemini API",
+        "adapter": "openai_compatible",
+        "description": "Gemini models with a Google AI Studio API key; separate from Gemini CLI sign-in.",
+        "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+        "api_key_env": "GEMINI_API_KEY", "model": "",
+    },
+    {
+        "id": "mistral", "label": "Mistral / Devstral", "adapter": "openai_compatible",
+        "description": "Devstral coding models through Mistral's API. Choose a tool-capable model available to your account.",
+        "base_url": "https://api.mistral.ai/v1",
+        "api_key_env": "MISTRAL_API_KEY", "model": "",
+    },
+    {
+        "id": "lmstudio", "label": "LM Studio", "adapter": "openai_compatible",
+        "description": "Start LM Studio's local server and load a model with native tool support.",
+        "base_url": "http://127.0.0.1:1234/v1", "api_key_env": "", "model": "",
     },
     {
         "id": "ollama", "label": "Ollama", "adapter": "openai_compatible",
@@ -600,7 +620,7 @@ class PilferedParrotApp:
             config["web"].get("chat_reasoning_effort") or "low"
         ).strip().lower()
         if self.chat_reasoning_effort not in {
-            "none", "low", "medium", "high", "xhigh", "max",
+            "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
         }:
             raise ValueError("web.chat_reasoning_effort is invalid")
         self.store.chat_model = self.chat_model
@@ -621,6 +641,12 @@ class PilferedParrotApp:
                 ))
                 model = chat_thread.get("model") or self._preferred_chat_model(provider)
                 chat_thread["model"] = model
+                try:
+                    chat_thread["reasoning_effort"] = self._selected_reasoning_effort(
+                        provider, model, chat_thread.get("reasoning_effort"),
+                    )
+                except ValueError:
+                    chat_thread["reasoning_effort"] = None
                 chat_max = model_max_context_window(self.config, provider, model)
                 chat_limit = model_context_window(self.config, provider, model, percent)
                 if chat_limit is not None:
@@ -766,6 +792,8 @@ class PilferedParrotApp:
                 raise ValueError("unknown provider")
         elif provider and provider not in self._provider_ids(include_hidden=True):
             raise ValueError("unknown provider")
+        if scope == "chat" and provider:
+            self._require_chat_support(provider)
         token = secrets.token_urlsafe(32)
         with self.capabilities_lock:
             self.capabilities[token] = {
@@ -982,9 +1010,10 @@ class PilferedParrotApp:
                 payload = json.loads(response.read().decode("utf-8"))
         except Exception as error:
             raise ValueError(
-                f"Could not discover models automatically: {error}. Enter a Model ID to add "
+                "Could not discover models automatically: "
+                f"{redact_configured_secrets(temporary_config, error)}. Enter a Model ID to add "
                 "the card without discovery."
-            ) from error
+            ) from None
         raw_models = payload.get("data") if isinstance(payload, dict) else None
         models = []
         for item in raw_models if isinstance(raw_models, list) else []:
@@ -996,6 +1025,14 @@ class PilferedParrotApp:
                 "The endpoint returned no models. Enter a Model ID to add the card anyway."
             )
         return list(dict.fromkeys(models))[:200]
+
+    def provider_update(self, provider: str) -> dict[str, Any]:
+        """Check the selected CLI without running a model or installing software."""
+        from .provider_updates import check_provider_update
+
+        if provider not in self._provider_ids(include_hidden=True):
+            raise ValueError("unknown provider")
+        return check_provider_update(self.config, provider)
 
     def poll_provider_models(self, provider: str) -> dict[str, Any]:
         """Refresh a provider's model choices without spending a model turn."""
@@ -1010,7 +1047,7 @@ class PilferedParrotApp:
             return {
                 "provider": provider, **deepcopy(catalog),
                 "polled_at": int(time.time()), "source": "configured_fallback",
-                "warning": str(error),
+                "warning": redact_configured_secrets(self.config, error),
             }
         default = catalog.get("default")
         if default and not any(option.get("value") == default for option in options):
@@ -1214,13 +1251,32 @@ class PilferedParrotApp:
         provider = str(window_provider or payload.get("provider") or self.default_provider)
         if provider not in self._provider_ids(include_hidden=bool(window_provider)):
             raise ValueError(f"provider must be one of: {', '.join(self._provider_ids())}")
+        latest_defaults = self.store.latest_work_defaults(provider, window_id)
+        latest_model = latest_defaults[0] if latest_defaults else None
+        latest_reasoning = latest_defaults[1] if latest_defaults else None
+        explicit_model = bool(payload.get("model"))
         requested_model = self._normalize_model(payload.get("model")) \
-            if payload.get("model") else self._preferred_work_model(provider)
+            if explicit_model else self._normalize_model(latest_model) \
+            or self._preferred_work_model(provider)
         cwd = _project_directory(_migrate_renamed_project_path(
             payload.get("cwd") or self.default_cwd, self.renamed_repository_root,
         ))
         _validate_provider_workspace(provider, cwd, self.config)
         model = requested_model or effective_model(self.config, provider)
+        explicit_reasoning = "reasoning_effort" in payload
+        requested_reasoning = payload.get("reasoning_effort") if explicit_reasoning else latest_reasoning
+        try:
+            reasoning_effort = self._selected_reasoning_effort(
+                provider, model, requested_reasoning,
+            )
+        except ValueError:
+            # Model capabilities can change between sessions, even when the
+            # model ID stays the same. Discard stale inherited preferences;
+            # explicit invalid choices remain errors for callers to correct.
+            if not explicit_reasoning:
+                reasoning_effort = None
+            else:
+                raise
         percent = self._preferred_work_context_percent(provider)
         context_max = model_max_context_window(self.config, provider, model)
         context_limit = model_context_window(self.config, provider, model, percent)
@@ -1233,7 +1289,7 @@ class PilferedParrotApp:
                 self.store.data["preferences"]["work_models"][provider] = requested_model
             return self.store.create(
                 cwd, provider, requested_model, context_limit, context_max, percent,
-                overhead, reservation, window_id,
+                overhead, reservation, window_id, reasoning_effort,
             )
 
     def _owned_chat(self, chat_id: str, window_id: str | None) -> dict[str, Any]:
@@ -1336,6 +1392,12 @@ class PilferedParrotApp:
                     self.config, selected_provider, model, percent,
                 )
                 chat_thread["model"] = model
+                try:
+                    chat_thread["reasoning_effort"] = self._selected_reasoning_effort(
+                        selected_provider, model, chat_thread.get("reasoning_effort"),
+                    )
+                except ValueError:
+                    chat_thread["reasoning_effort"] = None
                 chat_thread.pop("provider_session_id", None)
                 chat_thread.pop("live_context_usage", None)
                 chat_thread.pop("last_turn_usage", None)
@@ -1366,6 +1428,92 @@ class PilferedParrotApp:
         if not model or len(model) > 128 or any(ord(char) < 32 for char in model):
             raise ValueError("model must be a valid model ID")
         return model
+
+    def _selected_reasoning_effort(
+        self, provider: str, model: str | None, value: Any,
+    ) -> str | None:
+        """Validate an explicit reasoning choice against local model metadata."""
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError("reasoning effort must be a string or null")
+        effort = value.strip().lower()
+        if not effort:
+            raise ValueError("reasoning effort must be a string or null")
+        if provider != "codex":
+            raise ValueError("reasoning effort is only supported for Codex")
+        option = next((item for item in model_catalog(self.config).get("codex", {}).get("options", [])
+                       if item.get("value") == model), None)
+        # A manually entered Codex model has no cache record. Match catalog's
+        # conservative metadata fallback so the picker and request validator
+        # do not disagree.
+        supported = option.get("reasoning_efforts") if option else ["low", "medium", "high"]
+        if not isinstance(supported, list) or effort not in supported:
+            raise ValueError("reasoning effort is not supported by the selected model")
+        return effort
+
+    def set_reasoning_effort(
+        self, chat_id: str, payload: dict[str, Any], *, window_id: str | None = None,
+    ) -> dict[str, Any]:
+        if "reasoning_effort" not in payload:
+            raise ValueError("reasoning_effort is required")
+        with self.runs_lock:
+            if chat_id in self.runs:
+                raise ValueError("stop the response before changing reasoning effort")
+            with self.store.lock:
+                chat = self._owned_chat(chat_id, window_id)
+                provider = str(chat.get("requested_provider") or self.default_provider)
+                requested_model = self._normalize_model(payload.get("model")) \
+                    if "model" in payload else chat.get("requested_model")
+                model = requested_model or effective_model(self.config, provider)
+                effort = self._selected_reasoning_effort(
+                    provider, model, payload.get("reasoning_effort"),
+                )
+                chat["requested_model"] = requested_model
+                chat["reasoning_effort"] = effort
+                self.store.mark_used(chat)
+                self.store.save()
+                return self.store.public(chat)
+
+    def activate_chat(
+        self, chat_id: str, *, window_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Persist an explicitly opened work session as the latest selection."""
+        with self.store.lock:
+            chat = self._owned_chat(chat_id, window_id)
+            self.store.mark_used(chat)
+            self.store.save()
+            return self.store.public(chat)
+
+    def set_chat_reasoning_effort(
+        self, payload: dict[str, Any], *, provider: str | None = None,
+    ) -> dict[str, Any]:
+        if "reasoning_effort" not in payload:
+            raise ValueError("reasoning_effort is required")
+        with self.runs_lock:
+            if self.chat_run is not None:
+                raise ValueError("stop Chat before changing reasoning effort")
+            with self.store.lock:
+                chat = self.store.data["chat"]
+                selected_provider = str(provider or chat.get("provider") or self.default_provider)
+                if selected_provider not in self._provider_ids(include_hidden=True) \
+                        or chat.get("provider") != selected_provider:
+                    raise ValueError("Chat belongs to another provider window")
+                model = self._normalize_model(payload.get("model")) \
+                    if "model" in payload else chat.get("model")
+                if model is None:
+                    raise ValueError("choose a model before selecting reasoning effort")
+                effort = self._selected_reasoning_effort(
+                    selected_provider, model, payload.get("reasoning_effort"),
+                )
+                if model != chat.get("model"):
+                    if chat.get("messages"):
+                        raise ValueError("start a new chat before changing the chat model")
+                    chat["model"] = model
+                    chat.pop("provider_session_id", None)
+                chat["reasoning_effort"] = effort
+                self.store.save()
+                return self.store.chat_public()
 
     def delete_chat(self, chat_id: str, *, window_id: str | None = None) -> None:
         with self.runs_lock:
@@ -1401,12 +1549,25 @@ class PilferedParrotApp:
                     else chat.get("requested_model")
                 requested_model = self._normalize_model(model_value)
                 selected_model = requested_model or effective_model(self.config, provider)
+                if "reasoning_effort" in payload:
+                    reasoning_effort = self._selected_reasoning_effort(
+                        provider, selected_model, payload.get("reasoning_effort"),
+                    )
+                else:
+                    reasoning_effort = chat.get("reasoning_effort")
+                    try:
+                        reasoning_effort = self._selected_reasoning_effort(
+                            provider, selected_model, reasoning_effort,
+                        )
+                    except ValueError:
+                        reasoning_effort = None
                 if requested_model:
                     self.store.data["preferences"]["work_models"][provider] = requested_model
                 same_session = provider == chat.get("provider") \
                     and selected_model == chat.get("model")
                 chat["requested_provider"] = provider
                 chat["requested_model"] = requested_model
+                chat["reasoning_effort"] = reasoning_effort
                 if not same_session:
                     chat.pop("live_context_usage", None)
                     chat.pop("last_turn_usage", None)
@@ -1465,9 +1626,11 @@ class PilferedParrotApp:
                     "requested_provider": provider,
                     "requested_model": requested_model,
                     "provider": provider,
+                    "reasoning_effort": reasoning_effort,
                 }
                 chat["messages"].append(pending)
                 chat["updated_at"] = now
+                self.store.mark_used(chat)
                 self.store.save()
                 public = self.store.public(chat)
             self.runs[chat_id] = active
@@ -1486,7 +1649,11 @@ class PilferedParrotApp:
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 failed = self._message(chat, pending["id"])
-                failed.update({"content": f"PilferedParrot error: {error}", "error": True})
+                failed.update({
+                    "content": "PilferedParrot error: "
+                    f"{redact_configured_secrets(self.config, error)}",
+                    "error": True,
+                })
                 failed.pop("pending", None)
                 self.store.save()
             raise
@@ -1497,11 +1664,13 @@ class PilferedParrotApp:
     ) -> None:
         provider: str | None = None
         budgets: dict[str, ProviderBudget] = {}
+        conversation: Conversation | None = None
         try:
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 provider = chat["requested_provider"]
                 requested_model = chat.get("requested_model")
+                reasoning_effort = chat.get("reasoning_effort")
                 current_provider = chat.get("provider")
                 current_model = chat.get("model")
                 if current_provider and current_model is None \
@@ -1525,10 +1694,13 @@ class PilferedParrotApp:
             run_config = deepcopy(self.config)
             if selected_model:
                 run_config[provider]["model"] = selected_model
+            if provider == "codex" and reasoning_effort is not None:
+                run_config["codex"]["reasoning_effort"] = reasoning_effort
             if provider == "codex" and context_limit is not None:
                 run_config["codex"]["context_window_limit_tokens"] = context_limit
             conversation = Conversation(
                 provider=provider,
+                response_identity=configured_identity(run_config, provider),
                 provider_session_id=session_id if same_session else None,
                 messages=provider_messages
                 if (provider == "qwen" or
@@ -1540,6 +1712,7 @@ class PilferedParrotApp:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
                 pending["model"] = selected_model
+                pending["reasoning_effort"] = reasoning_effort
                 if not same_session:
                     chat.pop("last_turn_usage", None)
                 if context_limit is not None:
@@ -1580,6 +1753,8 @@ class PilferedParrotApp:
             content = result.text or result.error or f"{provider.title()} exited without a response."
             if result.exit_code and result.error and result.text:
                 content += f"\n\n{result.error}"
+            if result.exit_code:
+                content = redact_configured_secrets(self.config, content)
             with self.store.lock:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
@@ -1587,6 +1762,7 @@ class PilferedParrotApp:
                     "content": content,
                     "provider": provider,
                     "model": selected_model,
+                    "reasoning_effort": reasoning_effort,
                     "exit_code": result.exit_code,
                     "error": bool(result.exit_code),
                 })
@@ -1631,7 +1807,8 @@ class PilferedParrotApp:
                 chat = self.store.get(chat_id)
                 pending = self._message(chat, pending_id)
                 pending.update({
-                    "content": f"PilferedParrot error: {exc}",
+                    "content": "PilferedParrot error: "
+                    f"{redact_configured_secrets(self.config, exc)}",
                     "provider": provider,
                     "error": True,
                     "exit_code": 1,
@@ -1641,6 +1818,8 @@ class PilferedParrotApp:
                 with self.store.lock:
                     chat = self.store.get(chat_id)
                     pending = self._message(chat, pending_id)
+                    if conversation is not None:
+                        pending["response_identity"] = deepcopy(conversation.response_identity)
                     pending.pop("pending", None)
                     pending.pop("cancel_requested", None)
                     chat["updated_at"] = int(time.time())
@@ -1682,6 +1861,10 @@ class PilferedParrotApp:
                     public = self.store.public(chat)
         return public
 
+    def _require_chat_support(self, provider: str) -> None:
+        if not adapter_for(provider, self.config).capabilities.chat:
+            raise ValueError("This provider supports Work only; read-only Chat is not yet supported.")
+
     def send_chat_message(
         self, payload: dict[str, Any], *, provider: str | None = None,
     ) -> dict[str, Any]:
@@ -1702,6 +1885,7 @@ class PilferedParrotApp:
                                         or self.default_provider)
                 if selected_provider not in self._provider_ids(include_hidden=True):
                     raise ValueError("unknown provider")
+                self._require_chat_support(selected_provider)
                 if chat_thread.get("provider") != selected_provider:
                     if provider is not None or chat_thread.get("messages"):
                         raise ValueError("Chat belongs to another provider window")
@@ -1716,6 +1900,18 @@ class PilferedParrotApp:
                 )
                 if requested_model is None:
                     raise ValueError("choose a model before sending a Chat message")
+                if "reasoning_effort" in payload:
+                    reasoning_effort = self._selected_reasoning_effort(
+                        selected_provider, requested_model, payload.get("reasoning_effort"),
+                    )
+                else:
+                    reasoning_effort = chat_thread.get("reasoning_effort")
+                    try:
+                        reasoning_effort = self._selected_reasoning_effort(
+                            selected_provider, requested_model, reasoning_effort,
+                        )
+                    except ValueError:
+                        reasoning_effort = None
                 if requested_model != chat_thread.get("model"):
                     if chat_thread.get("messages"):
                         raise ValueError("start a new chat before changing the chat model")
@@ -1725,6 +1921,7 @@ class PilferedParrotApp:
                     chat_thread.pop("provider_session_id", None)
                     chat_thread.pop("live_context_usage", None)
                     chat_thread.pop("last_turn_usage", None)
+                chat_thread["reasoning_effort"] = reasoning_effort
                 self.store.data["preferences"]["work_models"][selected_provider] = requested_model
                 if selected_provider == "codex":
                     self.store.data["preferences"]["chat_model"] = requested_model
@@ -1767,6 +1964,7 @@ class PilferedParrotApp:
                     "pending": True,
                     "provider": selected_provider,
                     "model": requested_model,
+                    "reasoning_effort": reasoning_effort,
                 }
                 chat_thread["messages"].append(pending)
                 chat_thread["updated_at"] = now
@@ -1775,7 +1973,7 @@ class PilferedParrotApp:
             self.chat_run = active
         thread = threading.Thread(
             target=self._run_chat,
-            args=(pending["id"], content, selected_provider, requested_model, active),
+            args=(pending["id"], content, selected_provider, requested_model, reasoning_effort, active),
             name="pilferedparrot-chat",
             daemon=True,
         )
@@ -1790,7 +1988,11 @@ class PilferedParrotApp:
                         message for message in chat_thread["messages"]
                         if message.get("id") == pending["id"]
                     )
-                    failed.update({"content": f"Chat error: {error}", "error": True})
+                    failed.update({
+                        "content": "Chat error: "
+                        f"{redact_configured_secrets(self.config, error)}",
+                        "error": True,
+                    })
                     failed.pop("pending", None)
                     chat_thread["updated_at"] = int(time.time())
                     self.store.save()
@@ -1801,9 +2003,11 @@ class PilferedParrotApp:
 
     def _run_chat(
         self, pending_id: str, content: str, provider: str, model: str,
+        reasoning_effort: str | None,
         active: ActiveRun,
     ) -> None:
         reply = ""
+        conversation: Conversation | None = None
         try:
             with self.store.lock:
                 chat_thread = self.store.data["chat"]
@@ -1819,13 +2023,19 @@ class PilferedParrotApp:
             run_config = deepcopy(self.config)
             run_config[provider]["model"] = model
             if provider == "codex":
-                run_config["codex"]["reasoning_effort"] = self.chat_reasoning_effort
+                run_config["codex"]["reasoning_effort"] = (
+                    reasoning_effort or self.chat_reasoning_effort
+                )
                 run_config["codex"]["sandbox"] = "read-only"
                 run_config["codex"]["additional_write_dirs"] = []
             elif provider == "claude":
                 run_config["claude"]["permission_mode"] = "plan"
             elif provider == "gemini":
                 run_config["gemini"]["approval_mode"] = "plan"
+            elif provider == "antigravity":
+                run_config[provider]["mode"] = "plan"
+                run_config[provider]["read_only"] = True
+                run_config[provider]["additional_dirs"] = []
             else:
                 run_config[provider]["read_only"] = True
                 run_config[provider]["additional_dirs"] = []
@@ -1833,6 +2043,7 @@ class PilferedParrotApp:
                 run_config["codex"]["context_window_limit_tokens"] = context_limit
             conversation = Conversation(
                 provider=provider, provider_session_id=session_id,
+                response_identity=configured_identity(run_config, provider),
                 messages=provider_messages
                 if provider == "qwen" or run_config.get(provider, {}).get("adapter") \
                 == "openai_compatible" else [],
@@ -1869,7 +2080,7 @@ class PilferedParrotApp:
         except RunCancelled:
             reply = "Stopped."
         except Exception as error:
-            reply = f"Chat error: {error}"
+            reply = f"Chat error: {redact_configured_secrets(self.config, error)}"
         finally:
             with self.runs_lock:
                 with self.store.lock:
@@ -1924,6 +2135,9 @@ class PilferedParrotApp:
                         chat_thread["warning_announced"] = True
                     chat_thread["context_warning"] = usage["percent"] >= 80
                     pending["content"] = reply
+                    if conversation is not None:
+                        pending["response_identity"] = deepcopy(conversation.response_identity)
+                    pending["reasoning_effort"] = reasoning_effort
                     if reply.startswith("Chat error:"):
                         pending["error"] = True
                     pending.pop("pending", None)
@@ -1968,7 +2182,22 @@ class PilferedParrotApp:
                 if "model" in payload else self._preferred_chat_model(selected_provider)
             if model is None:
                 raise ValueError("choose a model before starting a Chat")
-            chat_thread = self.store.reset_chat(model, selected_provider)
+            if "reasoning_effort" in payload:
+                reasoning_effort = self._selected_reasoning_effort(
+                    selected_provider, model, payload.get("reasoning_effort"),
+                )
+            else:
+                with self.store.lock:
+                    previous_effort = self.store.data["chat"].get("reasoning_effort")
+                try:
+                    reasoning_effort = self._selected_reasoning_effort(
+                        selected_provider, model, previous_effort,
+                    )
+                except ValueError:
+                    reasoning_effort = None
+            chat_thread = self.store.reset_chat(
+                model, selected_provider, reasoning_effort=reasoning_effort,
+            )
             percent = self._preferred_chat_context_percent(selected_provider)
             context_max = model_max_context_window(self.config, selected_provider, model)
             context_limit = model_context_window(
@@ -2255,6 +2484,7 @@ class PilferedParrotApp:
         provider = str(payload.get("provider") or self.default_provider)
         if provider not in self._provider_ids(include_hidden=True):
             raise ValueError("unknown provider")
+        self._require_chat_support(provider)
         requested_model = self._normalize_model(payload.get("model"))
         model = requested_model or self._preferred_chat_model(provider)
         if model is None:

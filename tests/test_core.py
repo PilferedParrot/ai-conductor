@@ -63,7 +63,7 @@ class BudgetTests(unittest.TestCase):
             self.assertFalse(_start_command_available([directory]))
 
     def test_only_supported_providers_remain(self):
-        self.assertEqual(PROVIDERS, ("qwen", "codex", "claude", "gemini"))
+        self.assertEqual(PROVIDERS, ("qwen", "codex", "claude", "antigravity", "gemini"))
         self.assertIn("claude", load_config())
         self.assertIn("gemini", load_config())
         self.assertNotIn("routing", load_config())
@@ -131,7 +131,7 @@ class BudgetTests(unittest.TestCase):
         self, run, _resolve,
     ):
         config = load_config(Path("/definitely/missing/config.json"))
-        config["_hidden_providers"] = ["qwen", "codex", "gemini"]
+        config["_hidden_providers"] = ["qwen", "codex", "gemini", "antigravity"]
         run.return_value = subprocess.CompletedProcess(
             [], 0, json.dumps({
                 "loggedIn": True,
@@ -291,10 +291,12 @@ class CommandResolutionTests(unittest.TestCase):
             config["codex"]["models_cache"] = str(cache_path)
             self.assertEqual(effective_model(config, "codex"), "gpt-current")
             catalog = model_catalog(config)
-        self.assertEqual(set(catalog), {"qwen", "codex", "claude", "gemini"})
+        self.assertEqual(set(catalog), {"qwen", "codex", "claude", "antigravity", "gemini"})
         self.assertEqual(catalog["codex"]["options"], [
-            {"value": "gpt-current", "label": "GPT Current"},
-            {"value": "gpt-other", "label": "GPT Other"},
+            {"value": "gpt-current", "label": "GPT Current",
+             "reasoning_efforts": ["low", "medium", "high"]},
+            {"value": "gpt-other", "label": "GPT Other",
+             "reasoning_efforts": ["low", "medium", "high"]},
         ])
 
     def test_default_claude_catalog_has_only_numbered_models(self):
@@ -635,10 +637,17 @@ class CodexDispatchTests(unittest.TestCase):
     @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
     def test_invocation_can_override_codex_reasoning_effort(self, _command):
         config = load_config(Path("/definitely/missing/config.json"))
-        config["codex"]["reasoning_effort"] = "low"
-        command = _codex_command(Conversation(), config, Path.cwd())
-        override = command.index("--config")
-        self.assertEqual(command[override + 1], 'model_reasoning_effort="low"')
+        for effort in ("low", "minimal", "ultra"):
+            for session_id in (None, "resumed-session"):
+                with self.subTest(effort=effort, session_id=session_id):
+                    config["codex"]["reasoning_effort"] = effort
+                    command = _codex_command(
+                        Conversation(provider_session_id=session_id), config, Path.cwd(),
+                    )
+                    self.assertIn(f'model_reasoning_effort="{effort}"', command)
+                    if session_id:
+                        self.assertIn("resume", command)
+                        self.assertIn(session_id, command)
 
     @patch("pilferedparrot.dispatch.provider_command", return_value="codex")
     def test_invocation_applies_selected_context_window_share(self, _command):
@@ -786,11 +795,11 @@ class WebStoreTests(unittest.TestCase):
             app = PilferedParrotApp(_web_config(directory), Path(directory))
             state = app.state("dashboard")
             chat_state = app.state("chat")
-        self.assertEqual(set(state["models"]), {"qwen", "codex", "claude", "gemini"})
-        self.assertEqual(set(state["model_catalog"]), {"qwen", "codex", "claude", "gemini"})
+        self.assertEqual(set(state["models"]), {"qwen", "codex", "claude", "antigravity", "gemini"})
+        self.assertEqual(set(state["model_catalog"]), {"qwen", "codex", "claude", "antigravity", "gemini"})
         self.assertEqual(
             {provider["id"] for provider in state["providers"]},
-            {"qwen", "codex", "claude", "gemini"},
+            {"qwen", "codex", "claude", "antigravity", "gemini"},
         )
         claude = next(provider for provider in state["providers"] if provider["id"] == "claude")
         self.assertEqual(claude["auth_mode"], "cli")

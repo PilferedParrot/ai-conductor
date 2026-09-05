@@ -352,9 +352,15 @@ def _codex_command(conversation: Conversation, config: dict[str, Any], cwd: Path
     reasoning_effort = codex.get("reasoning_effort")
     if reasoning_effort is not None:
         reasoning_effort = str(reasoning_effort).strip().lower()
-        if reasoning_effort not in {"none", "low", "medium", "high", "xhigh", "max"}:
+        if reasoning_effort not in {"none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"}:
             raise ValueError(f"unsupported Codex reasoning effort: {reasoning_effort}")
         command += ["--config", f'model_reasoning_effort="{reasoning_effort}"']
+    approval_policy = codex.get("approval_policy")
+    if approval_policy is not None:
+        approval_policy = str(approval_policy).strip().lower()
+        if approval_policy not in {"untrusted", "on-failure", "on-request", "never"}:
+            raise ValueError(f"unsupported Codex approval policy: {approval_policy}")
+        command += ["--config", f'approval_policy="{approval_policy}"']
     context_limit = codex.get("context_window_limit_tokens")
     if context_limit is None:
         context_limit = model_context_window(config, "codex", codex.get("model"))

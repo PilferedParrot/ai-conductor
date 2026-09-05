@@ -18,6 +18,9 @@ from .model import provider_ids
 
 
 ROOT = Path(__file__).resolve().parent.parent
+CODEX_REASONING_EFFORTS = {
+    "none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra",
+}
 
 # Desktop launchers and systemd units inherit a minimal session PATH, so CLIs
 # installed by npm -g / volta / bun / homebrew are invisible to us even though an
@@ -103,6 +106,17 @@ DEFAULTS: dict[str, Any] = {
         "context_window_percent": 100,
         "request_timeout_seconds": 1800,
     },
+    "antigravity": {
+        "command": "agy",
+        "model": "gemini-3.8-flash-low",
+        "model_options": [
+            {"value": "gemini-3.8-flash-low", "label": "Gemini 3.8 Flash (Low)"},
+        ],
+        "context_window_tokens": None,
+        "context_window_percent": 100,
+        "mode": "accept-edits",
+        "request_timeout_seconds": 1800,
+    },
     "gemini": {
         "command": "gemini",
         "model": "auto",
@@ -167,6 +181,8 @@ def model_catalog(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
         } if isinstance(raw_hidden, (list, tuple, set)) else set()
         labels: dict[str, str] = {}
         context_windows: dict[str, tuple[int, int]] = {}
+        reasoning_capabilities: dict[str, tuple[list[str], str | None]] = {}
+        reasoning_metadata: set[str] = set()
         for value, label, window, maximum in _configured_model_entries(config, provider):
             if value in hidden:
                 continue
@@ -188,7 +204,15 @@ def model_catalog(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     value = raw.get("slug") or raw.get("model")
                     label = raw.get("display_name") or raw.get("displayName") or value
                     if isinstance(value, str) and value.strip() and value.strip() not in hidden:
-                        labels[value.strip()] = str(label or value).strip()
+                        value = value.strip()
+                        labels[value] = str(label or value).strip()
+                        if "supported_reasoning_levels" in raw:
+                            efforts = _reasoning_efforts(raw.get("supported_reasoning_levels"))
+                            default_effort = _reasoning_effort(
+                                raw.get("default_reasoning_level", raw.get("default_reasoning_effort")),
+                            )
+                            reasoning_capabilities[value] = (efforts, default_effort)
+                            reasoning_metadata.add(value)
                         try:
                             window = int(raw.get("context_window") or raw.get("contextWindow"))
                         except (TypeError, ValueError):
@@ -221,6 +245,27 @@ def model_catalog(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
                         window if window is not None else maximum,
                         maximum if maximum is not None else window,
                     )
+            raw_options = config.get(provider, {}).get("model_options") or ()
+            for raw in raw_options if isinstance(raw_options, (list, tuple)) else ():
+                if not isinstance(raw, dict):
+                    continue
+                value = raw.get("value") or raw.get("id") or raw.get("model")
+                if not isinstance(value, str) or not value.strip() or value.strip() in hidden:
+                    continue
+                if "reasoning_efforts" not in raw:
+                    continue
+                value = value.strip()
+                reasoning_capabilities[value] = (
+                    _reasoning_efforts(raw.get("reasoning_efforts")),
+                    _reasoning_effort(
+                        raw.get("default_reasoning_level", raw.get("default_reasoning_effort")),
+                    ),
+                )
+                reasoning_metadata.add(value)
+        if provider == "codex":
+            for value in labels:
+                if value not in reasoning_metadata:
+                    reasoning_capabilities.setdefault(value, (["low", "medium", "high"], None))
         options = []
         for value, label in labels.items():
             option: dict[str, Any] = {"value": value, "label": label}
@@ -230,8 +275,40 @@ def model_catalog(config: dict[str, Any]) -> dict[str, dict[str, Any]]:
                     option["context_window"] = window
                 if maximum is not None:
                     option["max_context_window"] = maximum
+            if value in reasoning_capabilities:
+                efforts, default_effort = reasoning_capabilities[value]
+                option["reasoning_efforts"] = efforts
+                if default_effort in efforts:
+                    option["default_reasoning_effort"] = default_effort
             options.append(option)
         result[provider] = {"default": selected, "options": options}
+        if provider == "codex":
+            result[provider]["reasoning_default_label"] = (
+                "Codex default" if config["codex"].get("reasoning_effort") is None
+                else f"Codex default · {str(config['codex']['reasoning_effort']).title()}"
+            )
+            chat_effort = str(config.get("web", {}).get("chat_reasoning_effort") or "low")
+            result[provider]["chat_reasoning_default_label"] = (
+                f"Chat default · {chat_effort.title()}"
+            )
+    return result
+
+
+def _reasoning_effort(value: Any) -> str | None:
+    if not isinstance(value, str):
+        return None
+    value = value.strip().lower()
+    return value if value else None
+
+
+def _reasoning_efforts(value: Any) -> list[str]:
+    if not isinstance(value, (list, tuple)):
+        return []
+    result: list[str] = []
+    for raw in value:
+        effort = _reasoning_effort(raw.get("effort") if isinstance(raw, dict) else raw)
+        if effort in CODEX_REASONING_EFFORTS and effort not in result:
+            result.append(effort)
     return result
 
 
@@ -307,6 +384,40 @@ def compatible_api_headers(config: dict[str, Any], provider: str) -> dict[str, s
         if not value:
             raise RuntimeError(f"Set ${variable} before using {provider}")
         result["Authorization"] = f"Bearer {value}"
+    return result
+
+
+def redact_configured_secrets(config: dict[str, Any], value: object) -> str:
+    """Remove active API-key values from text that may leave a provider boundary.
+
+    Only environment variables named by a configured ``api_key_env`` are read.
+    This deliberately does not inspect the rest of the process environment.
+    """
+    configured_sources = [
+        provider_config for provider_config in config.values()
+        if isinstance(provider_config, dict)
+    ]
+    # Provider definitions can be present before the dashboard materializes
+    # their individual runtime configuration entries.
+    definitions = config.get("provider_definitions")
+    if isinstance(definitions, dict):
+        configured_sources.extend(
+            definition for definition in definitions.values()
+            if isinstance(definition, dict)
+        )
+    variables = {
+        variable.strip()
+        for provider_config in configured_sources
+        if isinstance((variable := provider_config.get("api_key_env")), str)
+        and variable.strip()
+    }
+    result = str(value)
+    secrets = sorted(
+        (secret for variable in variables if (secret := os.environ.get(variable))),
+        key=len, reverse=True,
+    )
+    for secret in secrets:
+        result = result.replace(secret, "[redacted]")
     return result
 
 

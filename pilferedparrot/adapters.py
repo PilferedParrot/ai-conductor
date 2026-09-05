@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.error
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +22,7 @@ class ProgressEvent:
 @dataclass(frozen=True)
 class ProviderCapabilities:
     run: bool = True
+    chat: bool = True
     resume: bool = False
     cancel: bool = True
     streaming: bool = True
@@ -205,7 +207,8 @@ class OpenAICompatibleAdapter(ProviderAdapter):
             if runner is run_compatible_agent:
                 args = (self.provider, *args)
             text = runner(*args, cancel_event=event, on_progress=callback,
-                          token_usage=conversation.token_usage)
+                          token_usage=conversation.token_usage,
+                          response_identity=getattr(conversation, "response_identity", None))
             from .dispatch import RunResult
             usage = conversation.token_usage
             return RunResult(
@@ -227,14 +230,28 @@ class OpenAICompatibleAdapter(ProviderAdapter):
 
     def models(self) -> list[dict[str, Any]]:
         """Poll the standard OpenAI model-list endpoint for this account."""
-        from .config import compatible_api_headers, model_catalog, open_compatible_url
+        from .config import (
+            compatible_api_headers, model_catalog, open_compatible_url,
+            redact_configured_secrets,
+        )
         from urllib.request import Request
         base_url = str(self.config.get(self.provider, {}).get("base_url") or "").rstrip("/")
         request = Request(
             base_url + "/models", headers=compatible_api_headers(self.config, self.provider),
         )
-        with open_compatible_url(self.config, self.provider, request, timeout=5) as response:
-            payload = json.loads(response.read().decode("utf-8"))
+        try:
+            with open_compatible_url(self.config, self.provider, request, timeout=5) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            # Discovery only needs the status. Upstream bodies can contain
+            # credentials or unrelated diagnostics; do not reflect them.
+            exc.close()
+            raise RuntimeError(
+                f"{self.provider} model discovery failed (HTTP {exc.code})."
+            ) from None
+        except urllib.error.URLError as exc:
+            detail = redact_configured_secrets(self.config, exc)
+            raise RuntimeError(f"{self.provider} model discovery failed: {detail}") from None
         raw_models = payload.get("data") if isinstance(payload, dict) else None
         candidates = raw_models if isinstance(raw_models, list) else []
         ids = list(dict.fromkeys(
@@ -337,6 +354,14 @@ class GeminiAdapter(ProviderAdapter):
             self._cancellations.pop(id(conversation), None)
         from .dispatch import RunResult
         error = error_message or completed.stderr.strip() or None
+        if error and (
+            "IneligibleTierError" in error
+            or "This client is no longer supported for Gemini Code Assist for individuals" in error
+        ):
+            error = (
+                "Gemini CLI account tier is not supported; configure a Gemini API key "
+                "or an eligible organization account using the provider setup."
+            )
         exit_code = completed.returncode or (1 if error_message else 0)
         return RunResult(
             "".join(text_parts), exit_code, conversation.provider_session_id, error,
@@ -350,15 +375,15 @@ class GeminiAdapter(ProviderAdapter):
         return resolve_command(self.config, "gemini") is not None
 
     def authentication(self) -> bool | None:
-        import os
-        if os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY"):
-            return True
-        credentials = Path(os.environ.get("GEMINI_CLI_HOME") or Path.home() / ".gemini") \
-            / "oauth_creds.json"
-        return True if credentials.is_file() else None
+        # Credential presence does not establish that the account is eligible
+        # for the installed Gemini CLI or that a request can execute.
+        return None
 
 
 def adapter_for(provider: str, config: dict[str, Any]) -> ProviderAdapter:
+    if provider == "antigravity":
+        from .antigravity import AntigravityAdapter
+        return AntigravityAdapter(provider, config)
     adapter_type = PROVIDER_ADAPTERS.get(provider)
     if adapter_type is not None:
         return adapter_type(provider, config)

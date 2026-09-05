@@ -88,6 +88,16 @@ class MarkdownRendererTests(unittest.TestCase):
         ):
             self.assertIn(literal, output)
 
+    def test_preserves_intra_word_underscores_and_real_emphasis(self):
+        output = self.render(
+            "PARROT_UI_7281 _emphasis_ \\_literal\\_ `PARROT_UI_7281`",
+        )
+        self.assertIn("PARROT_UI_7281", output)
+        self.assertIn("<em>emphasis</em>", output)
+        self.assertIn(r"\_literal\_", output)
+        self.assertIn("<code>PARROT_UI_7281</code>", output)
+        self.assertNotIn("PARROT<em>UI</em>7281", output)
+
     def test_malformed_markup_and_unmatched_fence_keep_all_response_text(self):
         output = self.render(
             "Before **unclosed and [broken](https://)\n"

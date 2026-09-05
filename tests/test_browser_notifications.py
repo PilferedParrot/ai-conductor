@@ -60,12 +60,14 @@ class BrowserNotificationTests(unittest.TestCase):
         expect(self.page.get_by_role("textbox", name="Message")).to_be_enabled(timeout=5_000)
 
     def test_permission_request_is_persisted_until_explicit_reset(self):
+        self.page.locator("#preferencesDetails > summary").click()
         control = self.page.get_by_role("button", name="Enable desktop notifications")
         control.click()
         expect(self.page.get_by_role("button", name="Desktop notifications denied · Reset")).to_be_visible()
         self.assertEqual(self.page.evaluate("Notification.calls"), 1)
 
         self.page.reload(wait_until="domcontentloaded")
+        self.page.locator("#preferencesDetails > summary").click()
         expect(self.page.get_by_role("button", name="Desktop notifications denied · Reset")).to_be_visible()
         self.assertEqual(self.page.evaluate("Notification.calls"), 1)
 
@@ -78,6 +80,7 @@ class BrowserNotificationTests(unittest.TestCase):
         self.page.evaluate('toast("A successful action", "success")')
         toast = self.page.locator("#toast")
         expect(toast).to_be_visible()
+        self.assertTrue(toast.evaluate("node => !node.showPopover || node.matches(':popover-open')"))
         style = toast.evaluate("node => { const s = getComputedStyle(node); return { background: s.backgroundColor, border: s.borderColor, color: s.color, fontSize: parseFloat(s.fontSize) }; }")
         self.assertNotEqual(style["background"], "rgba(0, 0, 0, 0)")
         self.assertNotEqual(style["background"], style["color"])
@@ -93,6 +96,52 @@ class BrowserNotificationTests(unittest.TestCase):
         self.assertNotEqual(
             toast.evaluate("node => getComputedStyle(node).backgroundColor"), style["background"],
         )
+
+    def test_toast_follows_modal_open_close_and_reopen(self):
+        self.page.emulate_media(reduced_motion="reduce")
+        self.page.evaluate('toast("Connection setup needs attention", "error")')
+
+        def assert_readable(parent):
+            toast = self.page.get_by_role("status").filter(
+                has_text="Connection setup needs attention",
+            )
+            expect(toast).to_be_visible()
+            self.page.wait_for_function(
+                "parent => { const n = document.querySelector('#toast'); "
+                "return (n.parentElement.id || n.parentElement.tagName) === parent; }",
+                arg=parent,
+            )
+            result = toast.evaluate("""node => {
+                const rect = node.getBoundingClientRect();
+                node.style.pointerEvents = 'auto';
+                const hit = document.elementFromPoint(
+                    rect.left + rect.width / 2, rect.top + rect.height / 2,
+                );
+                node.style.pointerEvents = '';
+                return {
+                    hit: hit === node,
+                    right: innerWidth - rect.right,
+                    bottom: innerHeight - rect.bottom,
+                };
+            }""")
+            self.assertTrue(result["hit"], result)
+            self.assertAlmostEqual(result["right"], 18, delta=1)
+            self.assertAlmostEqual(result["bottom"], 18, delta=1)
+
+        assert_readable("BODY")
+        self.page.get_by_role("button", name="Provider dashboard").click()
+        assert_readable("providerDialog")
+        self.page.evaluate('document.querySelector("#providerLogoutDialog").showModal()')
+        assert_readable("providerLogoutDialog")
+        self.page.evaluate('document.querySelector("#providerLogoutDialog").close()')
+        assert_readable("providerDialog")
+        self.page.locator("#providerDialog").get_by_role("button", name="Close", exact=True).click()
+        assert_readable("BODY")
+        self.page.get_by_role("button", name="Provider dashboard").click()
+        assert_readable("providerDialog")
+        expect(self.page.locator("#toast")).to_be_hidden(timeout=6_000)
+        self.page.locator("#providerDialog").get_by_role("button", name="Close", exact=True).click()
+        expect(self.page.locator("#toast")).to_be_hidden()
 
 
 if __name__ == "__main__":

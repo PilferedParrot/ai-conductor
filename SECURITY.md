@@ -67,7 +67,7 @@ Gemini likewise executes through its local CLI in headless mode and keeps Google
 tool policy, and project-scoped session files under Gemini's control. PilferedParrot does not copy
 Gemini credentials into its browser state or chat store.
 
-The optional Chat pane is a separate, read-only Codex session. User messages go to that session
+The optional Chat window is a separate, read-only session with the selected provider. User messages go to that session
 directly; PilferedParrot does not inject technical messages or conversation metadata. Chat cannot
 switch, interrupt, rewrite, or relay technical requests, widen
 filesystem permissions, or bypass the technical provider's normal sandbox.

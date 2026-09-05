@@ -243,6 +243,9 @@ class PersistentChatStore:
             updated = chat.get("updated_at")
             chat["updated_at"] = int(updated) if isinstance(updated, (int, float)) \
                 and not isinstance(updated, bool) else chat["created_at"]
+            order = chat.get("last_used_order")
+            if order is not None and (isinstance(order, bool) or not isinstance(order, int) or order < 1):
+                chat.pop("last_used_order", None)
             raw_id = chat.get("id")
             chat_id = raw_id if isinstance(raw_id, str) and re.fullmatch(
                 r"[A-Za-z0-9_-]{1,128}", raw_id,
@@ -368,6 +371,7 @@ class PersistentChatStore:
             "context_chars": 0,
             "context_warning": False,
             "warning_announced": False,
+            "reasoning_effort": None,
         }
 
     @staticmethod
@@ -388,7 +392,7 @@ class PersistentChatStore:
         raw_id = chat_thread.get("id")
         if not isinstance(raw_id, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", raw_id):
             chat_thread["id"] = uuid.uuid4().hex
-        for field_name in ("title", "provider", "model", "cwd", "provider_session_id"):
+        for field_name in ("title", "provider", "model", "cwd", "provider_session_id", "reasoning_effort"):
             value = chat_thread.get(field_name)
             if value is not None and not isinstance(value, str):
                 raise RuntimeError(f"Chat thread contains an invalid {field_name}")
@@ -413,6 +417,7 @@ class PersistentChatStore:
             raise RuntimeError("Chat thread contains invalid provider state")
         chat_thread["provider_messages"] = provider_messages
         chat_thread["provider"] = chat_thread.get("provider") or "codex"
+        chat_thread.setdefault("reasoning_effort", None)
         if chat_thread.get("model") is None and chat_thread["provider"] == "codex":
             chat_thread["model"] = self.chat_model
         for message in chat_thread["messages"]:
@@ -545,7 +550,7 @@ class PersistentChatStore:
 
     def reset_chat(
         self, model: str | None = None, provider: str | None = None,
-        cwd: str | None = None,
+        cwd: str | None = None, reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         with self.lock:
             current = self.data["chat"]
@@ -558,6 +563,7 @@ class PersistentChatStore:
                 model, provider or str(current.get("provider") or "codex"),
                 cwd or current.get("cwd"),
             )
+            self.data["chat"]["reasoning_effort"] = reasoning_effort
             self.save()
             return self.chat_public()
 
@@ -567,11 +573,50 @@ class PersistentChatStore:
                 return chat
         raise KeyError(chat_id)
 
+    def latest_work_defaults(
+        self, provider: str, window_id: str = "main",
+    ) -> tuple[str | None, str | None] | None:
+        """Return the latest session's requested model and reasoning choice.
+
+        Work sessions are scoped to a provider window.  Keep the explicit
+        ``None`` reasoning value: it represents the user's Default choice and
+        must not be replaced by an older non-default setting.
+        """
+        with self.lock:
+            candidates = [
+                chat for chat in self.data["chats"]
+                if chat.get("window_id", "main") == window_id
+                and (chat.get("requested_provider") or chat.get("provider")) == provider
+            ]
+            if not candidates:
+                return None
+            # Recency is independent from display/activity timestamps.  A
+            # background response completion can update ``updated_at`` but
+            # cannot silently replace the model selection the user last used.
+            ordered = [
+                (index, chat) for index, chat in enumerate(candidates)
+                if isinstance(chat.get("last_used_order"), int)
+                and not isinstance(chat.get("last_used_order"), bool)
+                and chat["last_used_order"] > 0
+            ]
+            latest = max(
+                ordered,
+                key=lambda pair: (pair[1]["last_used_order"], pair[0]),
+            )[1] if ordered else max(enumerate(candidates), key=lambda pair: (
+                pair[1].get("updated_at", 0), pair[0],
+            ))[1]
+            model = latest.get("requested_model") or latest.get("model")
+            return (model if isinstance(model, str) and model else None,
+                    latest.get("reasoning_effort") if isinstance(
+                        latest.get("reasoning_effort"), str
+                    ) else None)
+
     def create(
         self, cwd: Path, requested_provider: str, requested_model: str | None = None,
         context_limit_tokens: int | None = None, context_max_tokens: int | None = None,
         context_window_percent: int = 100, context_overhead_tokens: int = 0,
         output_reservation_tokens: int = 0, window_id: str = "main",
+        reasoning_effort: str | None = None,
     ) -> dict[str, Any]:
         now = int(time.time())
         chat = {
@@ -583,6 +628,7 @@ class PersistentChatStore:
             "cwd": str(cwd),
             "requested_provider": requested_provider,
             "requested_model": requested_model,
+            "reasoning_effort": reasoning_effort,
             "provider": None,
             "model": None,
             "provider_session_id": None,
@@ -598,8 +644,22 @@ class PersistentChatStore:
             chat["context_window_percent"] = context_window_percent
         with self.lock:
             self.data["chats"].append(chat)
+            self.mark_used(chat)
             self.save()
         return self.public(chat)
+
+    def mark_used(self, chat: dict[str, Any]) -> None:
+        """Persist selection order while holding ``lock`` without changing timestamps."""
+        latest_order = max(
+            (
+                item.get("last_used_order", 0)
+                for item in self.data["chats"]
+                if isinstance(item.get("last_used_order", 0), int)
+                and not isinstance(item.get("last_used_order", 0), bool)
+            ),
+            default=0,
+        )
+        chat["last_used_order"] = latest_order + 1
 
     def delete(self, chat_id: str) -> None:
         with self.lock:

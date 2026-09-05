@@ -12,9 +12,11 @@ from typing import Any, Callable
 from .budgets import qwen_available
 from .config import (
     compatible_api_headers, open_compatible_url, provider_additional_dirs,
+    redact_configured_secrets,
     validate_qwen_endpoints,
 )
 from .qwen_tools import QwenToolbox, TOOL_DEFINITIONS, parse_tool_arguments
+from .response_identity import configured_identity, record_reported_model
 
 
 AGENT_SYSTEM_PROMPT = """You are PilferedParrot's coding agent. Work directly on the user's request
@@ -69,6 +71,7 @@ def _chat_completion(
     config: dict[str, Any],
     provider: str = "qwen",
     cancel_event: threading.Event | None = None,
+    response_identity: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if provider == "qwen":
         validate_qwen_endpoints(config)
@@ -98,17 +101,36 @@ def _chat_completion(
         try:
             with open_compatible_url(config, provider, request, timeout=timeout) as response:
                 result = json.load(response)
-            message = dict(result["choices"][0]["message"])
+            if not isinstance(result, dict):
+                raise _malformed_response(provider, "response body is not an object")
+            choices = result.get("choices")
+            if not isinstance(choices, list) or not choices:
+                raise _malformed_response(provider, "choices is missing or not a non-empty array")
+            if response_identity is not None:
+                record_reported_model(response_identity, result.get("model"), config)
+                for choice in choices:
+                    if isinstance(choice, dict):
+                        record_reported_model(response_identity, choice.get("model"), config)
+            choice = choices[0]
+            if not isinstance(choice, dict) or not isinstance(choice.get("message"), dict):
+                raise _malformed_response(provider, "first choice has no message object")
+            message = dict(choice["message"])
             usage = result.get("usage")
             if isinstance(usage, dict):
                 message["_pilferedparrot_usage"] = usage
             return message
+        except json.JSONDecodeError as exc:
+            raise _malformed_response(provider, f"invalid JSON body: {exc.msg}") from None
         except urllib.error.HTTPError as exc:
             try:
                 detail = exc.read(16_384).decode("utf-8", errors="replace")
             finally:
                 exc.close()
-            raise RuntimeError(f"{provider} request failed ({exc.code}): {detail}") from exc
+            detail = redact_configured_secrets(config, detail)
+            raise RuntimeError(f"{provider} request failed ({exc.code}): {detail}") from None
+        except urllib.error.URLError as exc:
+            detail = redact_configured_secrets(config, exc)
+            raise RuntimeError(f"{provider} request failed: {detail}") from None
 
     if cancel_event is None:
         return request_once()
@@ -146,6 +168,27 @@ def _tool_label(name: str, arguments: dict[str, Any]) -> str:
     return f"{name}({detail})"
 
 
+def _content_text(content: Any) -> str:
+    """Render OpenAI-compatible content for the UI without changing history."""
+    if content is None:
+        return ""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if (isinstance(item, dict)
+                    and item.get("type") in {"text", "output_text"}
+                    and isinstance(item.get("text"), str)):
+                parts.append(item["text"])
+        return "".join(parts)
+    return str(content)
+
+
+def _malformed_response(provider: str, detail: str) -> RuntimeError:
+    return RuntimeError(f"{provider} returned malformed chat completion: {detail}")
+
+
 def run_qwen_agent(
     prompt: str,
     messages: list[dict[str, Any]],
@@ -154,9 +197,11 @@ def run_qwen_agent(
     cancel_event: threading.Event | None = None,
     on_progress: Callable[[str, str], None] | None = None,
     token_usage: dict[str, int] | None = None,
+    response_identity: dict[str, Any] | None = None,
 ) -> str:
     return run_compatible_agent(
         "qwen", prompt, messages, config, cwd, cancel_event, on_progress, token_usage,
+        response_identity,
     )
 
 
@@ -169,15 +214,29 @@ def run_compatible_agent(
     cancel_event: threading.Event | None = None,
     on_progress: Callable[[str, str], None] | None = None,
     token_usage: dict[str, int] | None = None,
+    response_identity: dict[str, Any] | None = None,
 ) -> str:
     """Run any OpenAI-compatible model through the same contained tool loop."""
     provider_config = config[provider]
+    if response_identity is not None:
+        response_identity.clear()
+        response_identity.update(configured_identity(config, provider))
     additional_dirs = provider_additional_dirs(config, provider)
     toolbox = QwenToolbox(cwd, provider_config, additional_dirs)
     messages.append({"role": "user", "content": prompt})
     # Appended rather than interpolated: the context estimator formats this
     # template with an empty workspace, so the template keeps one field.
     system_prompt = AGENT_SYSTEM_PROMPT.format(cwd=cwd)
+    identity = response_identity or configured_identity(config, provider)
+    system_prompt += (
+        f"\nConfigured provider: {redact_configured_secrets(config, provider)}; requested model: "
+        f"{identity.get('requested_model', '')}; endpoint: "
+        f"{identity.get('endpoint_origin')} "
+        f"({identity.get('endpoint_kind')}). "
+        "This describes configured routing only: an endpoint location does not prove where "
+        "inference runs, and any model ID reported by the server is self-reported evidence, "
+        "not proof of the underlying model weights.\n"
+    )
     if provider_config.get("read_only"):
         system_prompt += (
             "\nThis is a read-only Chat instance. Inspect and explain, but do not modify "
@@ -197,6 +256,7 @@ def run_compatible_agent(
             raise RunCancelled("request cancelled")
         message = _chat_completion(
             [system, *messages], config, provider, cancel_event=cancel_event,
+            response_identity=response_identity,
         )
         raw_usage = message.pop("_pilferedparrot_usage", None)
         if isinstance(raw_usage, dict):
@@ -222,30 +282,55 @@ def run_compatible_agent(
         if cancel_event is not None and cancel_event.is_set():
             from .dispatch import RunCancelled
             raise RunCancelled("request cancelled")
-        content = message.get("content") or ""
+        content = message.get("content")
+        if content is not None and not isinstance(content, (str, list)):
+            raise _malformed_response(provider, "assistant content is not a string, array, or null")
+        if isinstance(content, list) and any(not isinstance(item, dict) for item in content):
+            raise _malformed_response(provider, "assistant content array contains a non-object block")
+        raw_tool_calls = message.get("tool_calls")
+        if raw_tool_calls is not None and not isinstance(raw_tool_calls, list):
+            raise _malformed_response(provider, "tool_calls is not an array")
         tool_calls = []
-        for index, raw_call in enumerate(message.get("tool_calls") or []):
+        for index, raw_call in enumerate(raw_tool_calls or []):
+            if not isinstance(raw_call, dict):
+                raise _malformed_response(provider, f"tool call {index} is not an object")
             call = dict(raw_call)
+            function = call.get("function")
+            if not isinstance(function, dict):
+                raise _malformed_response(provider, f"tool call {index} has no function object")
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise _malformed_response(provider, f"tool call {index} has no function name")
+            if "id" in call and (not isinstance(call["id"], str) or not call["id"].strip()):
+                raise _malformed_response(provider, f"tool call {index} has an invalid id")
             call.setdefault("id", f"qwen-tool-{_turn}-{index}")
             tool_calls.append(call)
         assistant_message: dict[str, Any] = {"role": "assistant", "content": content}
+        # OpenRouter and reasoning-compatible servers require these opaque
+        # fields to be replayed verbatim when tool results continue a turn.
+        # Keep them in the wire transcript, while only rendering content below.
+        for field in ("reasoning", "reasoning_details", "reasoning_content"):
+            if field in message:
+                assistant_message[field] = message[field]
         if tool_calls:
             assistant_message["tool_calls"] = tool_calls
         messages.append(assistant_message)
         if not tool_calls:
-            print(content)
-            if on_progress and content.strip():
-                on_progress("commentary", content.rstrip())
-            return content
-        if content.strip():
-            print(content.rstrip())
+            rendered = _content_text(content)
+            print(rendered)
+            if on_progress and rendered.strip():
+                on_progress("commentary", rendered.rstrip())
+            return rendered
+        rendered = _content_text(content)
+        if rendered.strip():
+            print(rendered.rstrip())
             if on_progress:
-                on_progress("commentary", content.rstrip())
+                on_progress("commentary", rendered.rstrip())
         for index, call in enumerate(tool_calls):
             if cancel_event is not None and cancel_event.is_set():
                 from .dispatch import RunCancelled
                 raise RunCancelled("request cancelled")
-            function = call.get("function") or {}
+            function = call["function"]
             name = function.get("name", "")
             call_id = call["id"]
             try:

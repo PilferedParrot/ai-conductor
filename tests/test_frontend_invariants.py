@@ -267,7 +267,7 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertIn('aria-label="Resize chat sidebar"', self.chat_html)
         self.assertIn('aria-controls="chatWindowSidebar"', self.chat_html)
         self.assertIn('/api/chat/messages', self.chat_js)
-        self.assertIn('JSON.stringify({ content, model, request_id: requestId })', self.chat_js)
+        self.assertIn('reasoning_effort: state.chat?.reasoning_effort || null', self.chat_js)
         self.assertIn('state.draftModel', self.chat_js)
         self.assertIn('/api/chat/window', self.app_js)
         self.assertIn('id="sidebarResizer"', self.index_html)
@@ -288,8 +288,8 @@ class FrontendInvariantTests(unittest.TestCase):
 
     def test_chat_history_precedes_controls_and_has_reserved_height(self):
         history = self.chat_html.find('class="history-group chat-window-history"')
-        model = self.chat_html.find('class="chat-model-card"')
-        context = self.chat_html.find('class="chat-window-context"')
+        model = self.chat_html.find('id="chatModelSelect"')
+        context = self.chat_html.find('class="chat-window-context sidebar-disclosure"')
         self.assertGreaterEqual(history, 0, "Chat history section is missing")
         self.assertGreaterEqual(model, 0, "Chat model controls are missing")
         self.assertGreaterEqual(context, 0, "Chat context controls are missing")
@@ -431,13 +431,18 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertNotIn('id="newParrotChat"', self.index_html)
         self.assertNotIn('id="newChat"', self.index_html)
         self.assertIn(
-            '$("#newWorkSession").addEventListener("click", () => createChat(',
+            '$("#newWorkSession").addEventListener("click", () => {',
             self.app_js,
         )
         self.assertIn('preferredModel(state.windowProvider)', self.app_js)
         create = _function_body(self.app_js, "createChat")
         self.assertIn("/api/chats", create)
         self.assertNotIn("/api/chat/", create)
+
+    def test_new_work_session_sends_the_visible_default_choice(self):
+        create = _function_body(self.app_js, "createChat")
+        self.assertIn('$("#reasoningSelect").value || null : undefined', create)
+        self.assertNotIn("draftReasoningEffort", create)
 
         self.assertNotIn('id="resetChat"', self.index_html)
         self.assertNotIn('/api/chat/reset', self.app_js)
@@ -765,7 +770,7 @@ class FrontendInvariantTests(unittest.TestCase):
         )
         self.assertRegex(
             self.app_css,
-            r"\.provider-card-head\s*\{[^}]*align-items:\s*baseline",
+            r"\.provider-card-head\s*>\s*span\s*\{[^}]*align-items:\s*baseline",
         )
 
     def test_narrow_technical_panes_reduce_header_density(self):
@@ -798,24 +803,18 @@ class FrontendInvariantTests(unittest.TestCase):
         self.assertLess(actions_start, provider_status_start)
         for control in ('newWorkSession', 'providerWindows', 'openChat'):
             self.assertEqual(sidebar.count(f'id="{control}"'), 1)
-        self.assertLess(sidebar.index('id="providerWindows"'), sidebar.index('id="newWorkSession"'))
+        self.assertLess(sidebar.index('id="newWorkSession"'), sidebar.index('id="providerWindows"'))
         self.assertLess(sidebar.index('id="newWorkSession"'), sidebar.index('id="openChat"'))
         self.assertRegex(
             sidebar,
-            r'id="providerWindows"[\s\S]*?<span>Providers</span>[\s\S]*?'
             r'id="newWorkSession"[\s\S]*?<span>New Session</span>[\s\S]*?'
+            r'id="providerWindows"[\s\S]*?<span>Providers</span>[\s\S]*?'
             r'id="openChat"[\s\S]*?<span>Chat</span>',
         )
         main = self.index_html.split('<main class="main"', 1)[1].split("</main>", 1)[0]
         self.assertNotIn('class="top-actions"', main)
-        self.assertRegex(
-            self.app_css,
-            r"\.sidebar-actions\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1\.15fr\)\s*minmax\(0,\s*1\.45fr\)\s*minmax\(0,\s*\.7fr\)",
-        )
-        self.assertRegex(
-            self.app_css,
-            r"\.sidebar-actions\s+\.new-work-session,[\s\S]*?height:\s*30px",
-        )
+        # Browser regressions check label visibility and overflow at desktop
+        # and narrow widths; exact grid ratios/heights are presentation choices.
 
     def test_narrow_sidebar_adapts_context_and_keeps_history_shrink_safe(self):
         queries = _container_query_bodies(self.app_css, "sidebar")

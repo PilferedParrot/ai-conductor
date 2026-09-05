@@ -24,25 +24,26 @@ fixture writes configuration, chat state, model state, and the run ledger under 
 directory, and replaces provider dispatch with an in-process fake. It needs no provider credentials
 and must not make external network requests.
 
-Install the pinned Python package and its Chromium/system dependencies:
+Run the helper once with `--setup` to create the persistent user-local environment, install the
+pinned Python package, and install Chromium:
 
 ```bash
-python3 -m venv /tmp/pilferedparrot-playwright
-/tmp/pilferedparrot-playwright/bin/pip install -r requirements-browser.txt
-/tmp/pilferedparrot-playwright/bin/python -m playwright install --with-deps chromium
+bin/check-browser-ui --setup
 ```
 
 Run precisely the browser suite, headlessly as CI does:
 
 ```bash
-PYTHONDONTWRITEBYTECODE=1 PILFEREDPARROT_REQUIRE_PLAYWRIGHT=1 \
-  /tmp/pilferedparrot-playwright/bin/python -m unittest discover \
-  -s tests -p 'test_browser_e2e.py' -v
+bin/check-browser-ui
 ```
 
-Without `PILFEREDPARROT_REQUIRE_PLAYWRIGHT=1`, normal test discovery skips these tests when the
-optional Playwright package is absent. CI installs Chromium and sets the variable so a missing
-browser dependency fails instead of silently skipping browser coverage.
+The helper uses `${XDG_DATA_HOME:-$HOME/.local/share}/ppi-playwright` by default; set
+`PPI_PLAYWRIGHT_ENV` to use another existing or setup target. Normal invocation requires that
+environment to exist and makes a missing Playwright dependency fail instead of silently skipping
+browser coverage.
+The pattern includes every browser suite, including responsive layout and folder-selection regressions.
+The helper does not invoke sudo; if Chromium reports missing system libraries, install the packages
+listed in that diagnostic using your distribution’s package manager, then rerun the helper.
 
 ## Pull requests
 
