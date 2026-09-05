@@ -1,21 +1,21 @@
-# PilferedParrot
+# PilferedParrot Interface
 
-> **Linux preview · v0.5.0**
+> **Stable Linux release · v0.5.1**
 >
-> PilferedParrot is a local Linux interface for coding CLIs and compatible local or remote
+> PilferedParrot Interface is a local Linux interface for coding CLIs and compatible local or remote
 > models. It keeps the provider you choose visible while giving you one browser workspace for
 > technical work and provider-matched Chat.
 >
-> [Project page](https://pilferedparrot.github.io/ai-conductor/) ·
-> [v0.5.0 release](https://github.com/PilferedParrot/ai-conductor/releases/tag/v0.5.0) ·
-> [Report a bug](https://github.com/PilferedParrot/ai-conductor/issues/new?template=bug_report.yml) ·
-> [Share feedback](https://github.com/PilferedParrot/ai-conductor/issues/new/choose)
+> [Project page](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
+> [v0.5.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.5.1) ·
+> [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
+> [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
 ![PilferedParrot Work preview](docs/assets/work-preview.png)
 
 *Synthetic conversation shown for illustration; no real account or chat data is included.*
 
-This public preview is intended for Linux. It has been best validated on Linux Mint with X11.
+This stable release is intended for Linux. It has been best validated on Linux Mint with X11.
 Google Antigravity currently supports **Work** only; other provider accounts and compatible
 endpoints require your own setup and credentials. See [provider compatibility](docs/provider-compatibility.md)
 and the [provider validation notes](docs/provider-expansion-validation.md) for current limits.
@@ -56,8 +56,8 @@ On a Linux machine with Python 3.12 or later and Chrome or Chromium installed, o
 run:
 
 ```bash
-git clone --branch v0.5.0 https://github.com/PilferedParrot/ai-conductor.git PilferedParrot
-cd PilferedParrot
+git clone --branch v0.5.1 https://github.com/PilferedParrot/PilferedParrot-Interface.git PilferedParrot-Interface
+cd PilferedParrot-Interface
 cp config.example.json config.json
 ```
 
@@ -70,7 +70,7 @@ Start the interface:
 In the browser, open **Providers** and select a configured, authenticated provider. If you use a
 compatible endpoint instead, choose **Add provider** and enter its endpoint and credential
 environment variable. Provider access, model availability, pricing, and limits belong to the
-account or service you configure; this preview does not promise free provider usage or universal
+account or service you configure; this release does not promise free provider usage or universal
 compatibility.
 
 `config.json` is ignored so machine-specific paths stay local. Start your Qwen server yourself,

@@ -1,9 +1,13 @@
-# PilferedParrot 0.5.0 interface readiness — 2026-09-05
+# PilferedParrot Interface 0.5.1 release readiness — 2026-09-05
 
 The interface and desktop integrations have passed automated and live validation on
 Linux Mint/X11. These checks describe the local source validation checkpoint; provider access remains
-account-specific. See the [release](https://github.com/PilferedParrot/ai-conductor/releases/tag/v0.5.0)
-for the published preview and its validation.
+account-specific. The 0.5.1 release is a repository/governance release that renames the project and
+exits preview. The complete 440-test suite was rerun for 0.5.1 with mandatory Playwright: all
+passed, with zero skips or failures. The renamed landing page also passed desktop and mobile
+checks at 1440, 390, and 320 pixels. No new provider-account or platform coverage is claimed.
+See the [v0.5.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.5.1)
+for final GitHub CI and publication evidence; the earlier live-validation evidence is preserved below.
 
 The subsequent provider expansion passed **440 tests with mandatory Playwright, zero
 skips or failures**. Antigravity and LM Studio now have live validation, while OpenRouter
