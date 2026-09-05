@@ -29,6 +29,17 @@ def stream(lines, *, returncode=0, stderr=""):
 
 
 class AntigravityAdapterTests(unittest.TestCase):
+    def setUp(self):
+        # Keep these protocol tests independent of whether an `agy` binary happens
+        # to be installed on the host running the suite.  provider_command is the
+        # dispatch boundary used by both command assembly and model discovery.
+        self._resolve_command = patch(
+            "pilferedparrot.dispatch.resolve_command",
+            return_value="/synthetic/bin/agy",
+        )
+        self._resolve_command.start()
+        self.addCleanup(self._resolve_command.stop)
+
     def test_nested_step_updates_and_resume_are_normalized(self):
         fake, seen = stream([
             {"event": "init", "conversation_id": "conv-1"},
