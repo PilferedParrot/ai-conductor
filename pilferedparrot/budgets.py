@@ -37,6 +37,7 @@ from .model import (
     ProviderBudget,
     provider_ids,
 )
+from .processes import provider_argv
 
 
 CLAUDE_USAGE_UNSUPPORTED_NOTE = (
@@ -168,9 +169,10 @@ def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
         )
     try:
         auth = subprocess.run(
-            [command, "login", "status"], capture_output=True, text=True, timeout=5,
+            provider_argv([command, "login", "status"]), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=5,
         )
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
         return ProviderBudget(
             "codex", False, status=STATUS_AUTH_UNVERIFIED,
             note=f"auth unverifiable (`codex login status` failed: {error})",
@@ -194,11 +196,11 @@ def read_codex_budget(config: dict[str, Any]) -> ProviderBudget:
     proc: subprocess.Popen[str] | None = None
     try:
         proc = subprocess.Popen(
-            [command, "app-server", "--listen", "stdio://"],
+            provider_argv([command, "app-server", "--listen", "stdio://"]),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
-            text=True,
+            text=True, encoding="utf-8", errors="replace",
             bufsize=1,
         )
         assert proc.stdin is not None and proc.stdout is not None
@@ -277,8 +279,8 @@ def read_claude_status(config: dict[str, Any]) -> ProviderBudget:
         )
     try:
         completed = subprocess.run(
-            [command, "auth", "status", "--json"], capture_output=True,
-            text=True, timeout=5,
+            provider_argv([command, "auth", "status", "--json"]), capture_output=True,
+            text=True, encoding="utf-8", errors="replace", timeout=5,
         )
     except subprocess.TimeoutExpired:
         return ProviderBudget(
@@ -287,10 +289,10 @@ def read_claude_status(config: dict[str, Any]) -> ProviderBudget:
             auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
             usage_status=USAGE_UNSUPPORTED, usage_note=CLAUDE_USAGE_UNSUPPORTED_NOTE,
         )
-    except OSError:
+    except (OSError, RuntimeError) as error:
         return ProviderBudget(
             "claude", False, status=STATUS_AUTH_UNVERIFIED,
-            note="auth unverifiable (`claude auth status` could not be run)",
+            note=f"auth unverifiable (`claude auth status` could not be run: {error})",
             auth_status=AUTH_UNKNOWN, reachability=UNREACHABLE,
             usage_status=USAGE_UNSUPPORTED, usage_note=CLAUDE_USAGE_UNSUPPORTED_NOTE,
         )

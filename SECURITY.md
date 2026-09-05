@@ -7,7 +7,7 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.5.1 and the current default branch | Yes |
+| 0.6.0 Windows preview, 0.5.1 Linux release, and the current default branch | Yes |
 | 0.5.0 preview and older releases | No; upgrade to the latest release |
 
 ## Reporting a vulnerability
@@ -26,6 +26,16 @@ PilferedParrot is a local, single-operator application. Its web server is intend
 loopback address. It does not provide accounts, multi-user authorization, TLS, or safe exposure
 through a LAN listener or reverse proxy. Processes running as the same OS user are inside the trust
 boundary and can access PilferedParrot's state and local HTTP service.
+
+The Windows executable is a portable console application. It does not request administrator rights;
+the user must keep its console open while it runs. Windows state is kept under
+`%LOCALAPPDATA%\PilferedParrot`, and the default project directory is `~/PilferedParrot Projects`.
+Windows uses the account's normal profile ACLs for these files; the owner-only mode wording elsewhere
+in this policy applies to POSIX systems. The preview package is currently unsigned, so verify its
+source and checksum before running it if your Windows policy requires signed binaries.
+Windows disables the Bubblewrap shell. Supported npm provider shims are resolved to their package
+entry point and run through Node without passing arbitrary batch files to `cmd.exe`; provider CLIs
+retain their own authentication, permissions, and network behavior.
 
 Provider prompts and outputs may contain sensitive source code. Chats and run
 metadata are stored locally with owner-only file permissions, but the selected provider CLI or

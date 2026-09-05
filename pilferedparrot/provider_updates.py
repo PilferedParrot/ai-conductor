@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from .config import resolve_command
+from .processes import provider_argv
 
 
 _TIMEOUT_SECONDS = 5
@@ -130,11 +131,11 @@ def check_provider_update(config: dict[str, Any], provider: str) -> dict[str, An
 
     try:
         completed = subprocess.run(
-            [executable, "--version"], capture_output=True, text=True,
-            timeout=_TIMEOUT_SECONDS, check=False,
+            provider_argv([executable, "--version"]), capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=_TIMEOUT_SECONDS, check=False,
         )
-    except (OSError, subprocess.SubprocessError):
-        return _result("unavailable", message="Could not read the installed CLI version.",
+    except (OSError, RuntimeError, subprocess.SubprocessError) as error:
+        return _result("unavailable", message=f"Could not read the installed CLI version: {error}.",
                        update_command=update_command)
     if completed.returncode != 0:
         return _result("unavailable", message="Could not read the installed CLI version.",

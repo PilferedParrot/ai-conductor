@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -253,6 +254,11 @@ class QwenToolbox:
         return rendered or f"{relative}: no change"
 
     def _shell(self, command: str, timeout_seconds: int | None = None) -> str:
+        if sys.platform == "win32":
+            raise RuntimeError(
+                "Sandboxed shell tools require Linux and Bubblewrap; Windows supports "
+                "file tools and diff. Use a native coding CLI for shell commands."
+            )
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command must be a non-empty string")
         timeout = self.shell_timeout if timeout_seconds is None else int(timeout_seconds)
@@ -328,7 +334,7 @@ class QwenToolbox:
             pathspec = ["--", str(target.relative_to(root))]
         probe = subprocess.run(
             ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            text=True, capture_output=True,
+            text=True, encoding="utf-8", errors="replace", capture_output=True,
         )
         if probe.returncode:
             changed_paths = self._baselines
@@ -346,7 +352,7 @@ class QwenToolbox:
         ]
         sections: list[str] = []
         for command in commands:
-            completed = subprocess.run(command, text=True, capture_output=True)
+            completed = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True)
             text = completed.stdout.rstrip()
             if text:
                 sections.append(text)

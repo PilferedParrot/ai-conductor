@@ -1,3 +1,25 @@
+# PilferedParrot Interface 0.6.0 release notes
+
+PilferedParrot Interface 0.6.0 keeps the stable Linux release and adds a portable Windows 10/11
+x64 preview. The planned Windows asset is
+[`PilferedParrot-0.6.0-windows-x64.zip`](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/PilferedParrot-0.6.0-windows-x64.zip);
+the planned source asset is
+[`pilferedparrot-0.6.0-source.tar.gz`](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/pilferedparrot-0.6.0-source.tar.gz).
+The Windows package is portable and bundles Python, requires no administrator rights, opens with
+Chrome, Chromium, or Edge, and keeps application state under `%LOCALAPPDATA%\PilferedParrot`.
+Its default project directory is `~/PilferedParrot Projects`; keep the console window open while
+the application runs.
+
+Windows providers remain separately installed and configured. The preview supports browser Chat
+and file tools, disables the Bubblewrap shell, and resolves supported npm shims through Node
+without `cmd.exe`. Automated Windows preview checks are pending final lead verification; this
+release makes no claim of real Windows provider-account or provider-CLI validation. Linux provider
+evidence below remains unchanged.
+
+## 0.5.1 history
+
+The following 0.5.1 and 0.5.0 notes are retained as historical implementation and validation records.
+
 # PilferedParrot Interface 0.5.1 release notes
 
 PilferedParrot Interface 0.5.1 is the stable Linux release and repository/governance release.

@@ -5,7 +5,20 @@ open an issue describing the use case and proposed trust-boundary impact.
 
 ## Development checks
 
-Use Python 3.12 or later on Linux. Bubblewrap is required for the shell-isolation tests.
+Use Python 3.12 or later for source development. Linux is the primary development and validation
+platform; Bubblewrap is required for the Linux shell-isolation tests. The Windows preview disables
+the Bubblewrap shell and needs no administrator rights.
+
+The portable Windows package is built on Windows x64 with the pinned PyInstaller version from
+`packaging/windows/build.ps1`. The build includes Python and provider-independent application
+assets; provider CLIs and model servers are not bundled.
+
+From a Windows source checkout, run `python -m pilferedparrot` or `PilferedParrot.cmd` with Python
+3.12 or newer. Run the focused Windows packaging and entry-point checks with
+`python -m unittest tests.test_windows_package tests.test_windows_entrypoint tests.test_windows_processes tests.test_windows_desktop`.
+Build the preview ZIP from a Windows PowerShell session with
+`.\packaging\windows\build.ps1`; the script writes the ZIP and `SHA256SUMS` under `dist`.
+The preview package is currently unsigned, so Windows may show an unverified-publisher warning.
 
 ```bash
 cp config.example.json config.json

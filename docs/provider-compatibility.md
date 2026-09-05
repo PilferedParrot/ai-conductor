@@ -15,6 +15,19 @@ contract. The current implementation has these integration paths:
 The Add provider form includes xAI/Grok, OpenRouter, Google AI Studio/Gemini API, Mistral/Devstral,
 LM Studio, Ollama,
 and a custom connection template.
+
+## Platform status
+
+The v0.6.0 Windows 10/11 x64 package is a portable preview. It bundles Python and opens the local
+interface with Chrome, Chromium, or Microsoft Edge; providers remain separately installed and
+configured. Browser Chat and file tools are supported in the preview. The Bubblewrap shell is
+disabled on Windows, and supported npm `.cmd` shims are resolved to their package entry points and
+run through Node without invoking `cmd.exe`.
+
+The Windows preview has CI/source coverage pending final lead verification. No real Windows
+provider account, CLI, or model validation is claimed. The provider rows and live results below
+therefore describe integration behavior and Linux or synthetic evidence where stated, not a
+Windows certification.
 A template supplies connection defaults; it does not certify every model offered by that service.
 Use an exact model ID available to your account. If model discovery is unavailable, enter the ID
 manually. A successful model-list request does not establish that the model can execute a work turn.
@@ -120,8 +133,11 @@ provider card, never the key value. Restart PPI after changing its inherited env
 keyed endpoints require HTTPS, and redirects cannot move credentials to another origin.
 Adding a remote provider authorizes sending that session's prompts and tool results to it.
 
-Shell execution requires Bubblewrap. Read/write tools stay within the approved workspace roots;
-Chat removes write and shell tools. Native CLI providers retain their own permission systems.
+On Linux, shell execution requires Bubblewrap. On Windows, the Bubblewrap shell is disabled.
+Read/write tools stay within the approved workspace roots; Chat removes write and shell tools.
+Native CLI providers retain their own permission systems. On Windows, only the supported npm
+provider packages are translated from npm shims to direct Node entry-point execution; arbitrary
+batch files are rejected.
 See [Security policy](../SECURITY.md) for the complete local trust boundary.
 
 ## Compatibility validation

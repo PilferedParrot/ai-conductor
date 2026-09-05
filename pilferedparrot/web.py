@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import base64
 import hmac
 import json
 import os
@@ -8,6 +9,7 @@ import re
 import secrets
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -33,7 +35,8 @@ from .config import (
     redact_configured_secrets,
     validate_compatible_base_url,
 )
-from .dispatch import RunCancelled, RunResult, capture_dispatch
+from .dispatch import RunCancelled, RunResult, capture_dispatch, _stop_process
+from .processes import provider_argv
 from .ledger import append_run
 from .model import (
     Conversation, PROVIDER_CATALOG, PROVIDERS, ProviderBudget,
@@ -452,6 +455,12 @@ def _fenced_code_blocks(content: str) -> list[str]:
 
 def _terminal_argv(command: str, cwd: Path) -> list[str]:
     """Build an interactive terminal command without interpolating shell input."""
+    if sys.platform == "win32":
+        shell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
+        if shell is None:
+            raise RuntimeError("PowerShell is required to open a command window")
+        encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
+        return [shell, "-NoLogo", "-NoProfile", "-NoExit", "-EncodedCommand", encoded]
     shell = shutil.which("bash") or "/bin/bash"
     script = (
         'cd -- "$1" || exit; bash -lc "$2"; status=$?; '
@@ -2252,10 +2261,13 @@ class PilferedParrotApp:
             raise ValueError("only a single non-empty command line can be run")
         if not cwd.is_dir():
             raise ValueError(f"project folder does not exist: {cwd}")
+        if sys.platform == "win32" and language in {"bash", "sh", "zsh", "fish"}:
+            raise ValueError("This command requires a Unix shell; use a PowerShell command on Windows")
         subprocess.Popen(
             _terminal_argv(command, cwd), cwd=cwd, stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
             start_new_session=True, close_fds=True,
+            **({"creationflags": subprocess.CREATE_NEW_CONSOLE} if sys.platform == "win32" else {}),
         )
 
     def provider_auth_action(self, provider: str, action: str) -> dict[str, Any]:
@@ -2277,6 +2289,7 @@ class PilferedParrotApp:
         }.get((provider, action))
         if argv is None:
             raise ValueError(f"{PROVIDER_LABELS.get(provider, provider)} does not support {action}")
+        argv = provider_argv(argv)
         if action == "login":
             with self.provider_login_lock:
                 active = self.provider_logins.get(provider)
@@ -2377,14 +2390,10 @@ class PilferedParrotApp:
                     active_login.process.stdin.close()
                 except OSError:
                     pass
-            active_login.process.terminate()
-            try:
-                active_login.process.wait(timeout=2)
-            except subprocess.TimeoutExpired:
-                active_login.process.kill()
-                active_login.process.wait(timeout=1)
+            _stop_process(active_login.process)
         completed = subprocess.run(
-            argv, cwd=self.default_cwd, capture_output=True, text=True, timeout=15,
+            argv, cwd=self.default_cwd, capture_output=True, text=True,
+            encoding="utf-8", errors="replace", timeout=15,
         )
         if completed.returncode != 0:
             detail = ((completed.stderr or completed.stdout) or "").strip()
@@ -2538,12 +2547,7 @@ class PilferedParrotApp:
                 except OSError:
                     pass
             if process.poll() is None:
-                process.terminate()
-                try:
-                    process.wait(timeout=max(0, deadline - time.monotonic()))
-                except subprocess.TimeoutExpired:
-                    process.kill()
-                    process.wait(timeout=1)
+                _stop_process(process)
         self.native.shutdown(deadline=deadline)
 
 

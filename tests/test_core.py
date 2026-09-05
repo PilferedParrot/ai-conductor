@@ -150,7 +150,7 @@ class BudgetTests(unittest.TestCase):
 
         run.assert_called_once_with(
             ["/usr/bin/claude", "auth", "status", "--json"],
-            capture_output=True, text=True, timeout=5,
+            capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=5,
         )
         self.assertTrue(budget.available)
         self.assertEqual(budget.auth_status, AUTH_SIGNED_IN)
@@ -1723,10 +1723,10 @@ class WebStoreTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             app = PilferedParrotApp(_web_config(directory), Path(directory))
             app.provider_logins["claude"] = MagicMock(process=process)
-            app.shutdown()
+            with patch("pilferedparrot.web._stop_process") as stop_process:
+                app.shutdown()
+        stop_process.assert_called_once_with(process)
         process.stdin.close.assert_called_once_with()
-        process.terminate.assert_called_once_with()
-        process.wait.assert_called_once()
         self.assertEqual(app.provider_logins, {})
 
     def test_provider_auth_route_passes_only_validated_provider_and_action(self):

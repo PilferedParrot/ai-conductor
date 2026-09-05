@@ -17,6 +17,7 @@ from .config import (
     codex_additional_write_dirs, expanded_path, model_context_window, resolve_command,
 )
 from .model import Conversation
+from .processes import provider_argv
 from .qwen import run_compatible_agent, run_qwen_agent
 
 
@@ -49,17 +50,41 @@ def _check_cancelled(cancel_event: threading.Event | None) -> None:
 def _stop_process(proc: subprocess.Popen[str]) -> None:
     if proc.poll() is not None:
         return
-    try:
-        os.killpg(proc.pid, signal.SIGTERM)
-    except (OSError, ProcessLookupError):
-        proc.terminate()
+    pid = getattr(proc, "pid", None)
+    # Do not coerce this value: MagicMock.__index__() defaults to 1, and
+    # killpg(1, sig) becomes kill(-1, sig), a broadcast signal on Linux.
+    if type(pid) is not int or pid <= 1 or pid == os.getpid():
+        return
+    if sys.platform != "win32" and pid == os.getpgrp():
+        return
+    if sys.platform == "win32":
+        try:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/T", "/F"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                timeout=2, check=False,
+            )
+        except (OSError, ValueError, subprocess.TimeoutExpired):
+            pass
+        try:
+            proc.wait(timeout=1)
+        except subprocess.TimeoutExpired:
+            proc.terminate()
+    else:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+        except (OSError, ProcessLookupError):
+            proc.terminate()
     try:
         proc.wait(timeout=2)
     except subprocess.TimeoutExpired:
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (OSError, ProcessLookupError):
+        if sys.platform == "win32":
             proc.kill()
+        else:
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (OSError, ProcessLookupError):
+                proc.kill()
         try:
             proc.wait(timeout=1)
         except subprocess.TimeoutExpired:
@@ -77,11 +102,11 @@ def _capture_process(
     """Capture a CLI while retaining the ability to cancel or time it out."""
     _check_cancelled(cancel_event)
     proc = subprocess.Popen(
-        command,
+        provider_argv(command),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         cwd=cwd,
         start_new_session=True,
     )
@@ -122,11 +147,11 @@ def _stream_process(
     """Drain a provider line-by-line while retaining cancellation and stderr."""
     _check_cancelled(cancel_event)
     proc = subprocess.Popen(
-        command,
+        provider_argv(command),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        text=True,
+        text=True, encoding="utf-8", errors="replace",
         cwd=cwd,
         bufsize=1,
         start_new_session=True,
@@ -313,8 +338,8 @@ def _codex_session_live_usage(
 def dispatch_codex(prompt: str, cwd: Path, conversation: Conversation, config: dict[str, Any]) -> int:
     command = _codex_command(conversation, config, cwd)
     proc = subprocess.Popen(
-        command, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
-        text=True, cwd=cwd, bufsize=1,
+        provider_argv(command), stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=None,
+        text=True, encoding="utf-8", errors="replace", cwd=cwd, bufsize=1,
     )
     assert proc.stdin is not None and proc.stdout is not None
     proc.stdin.write(prompt)
