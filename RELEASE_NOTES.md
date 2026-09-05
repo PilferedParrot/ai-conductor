@@ -1,3 +1,26 @@
+# PilferedParrot Interface 0.5.1 release notes
+
+PilferedParrot Interface 0.5.1 is the stable Linux release and repository/governance release.
+It records the project rename from `PilferedParrot/ai-conductor` to
+`PilferedParrot/PilferedParrot-Interface`, establishes repository ownership protections, and
+ends the public preview designation. The runtime is unchanged apart from its version. The complete 440-test suite passed again
+with mandatory Playwright and no skips. The earlier live-validation evidence below is preserved
+from 0.5.0; no additional provider-account or platform coverage is claimed for 0.5.1.
+
+Contributions now require a pull request, maintainer review, passing CI, and CodeQL checks.
+Protected branches cannot be force-pushed or deleted, and published version tags cannot be
+changed. Secret scanning, push protection, private vulnerability reporting, and dependency
+security updates are enabled. CI checkouts no longer retain their GitHub credentials.
+
+See the [v0.5.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.5.1)
+and [release readiness notes](docs/release-readiness.md). Linux Mint with X11 remains the best
+validated environment. Google Antigravity supports Work only, and other provider accounts or
+compatible endpoints require their own setup and credentials.
+
+## 0.5.0 history
+
+The following 0.5.0 notes are retained as the historical implementation record.
+
 # PilferedParrot 0.5.0 release notes
 
 PilferedParrot 0.5.0 is a public Linux preview of the local browser interface for coding CLIs and

@@ -47,6 +47,14 @@ listed in that diagnostic using your distribution’s package manager, then reru
 
 ## Pull requests
 
+- Fork the repository, create a focused branch, and open a pull request for every contribution.
+- External contributions require owner review. Any approval is dismissed when new commits are
+  pushed; the latest push must be reviewed before merge.
+- A pull request must pass all four required CI checks and have every discussion resolved.
+  CodeQL must complete without code-scanning errors or high/critical security findings.
+- The sole maintainer may use the admin-only pull request path for their own changes, but those
+  changes must still pass all required CI checks.
+- Do not push directly to protected branches, force-push, or delete branches.
 - Explain the user-visible behavior and security implications.
 - Keep commits scoped and use an identity you are comfortable publishing.
 - Confirm that no generated files or private data appear anywhere in the submitted history.

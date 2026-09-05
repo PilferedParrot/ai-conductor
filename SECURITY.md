@@ -7,7 +7,8 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.4.x | Yes |
+| 0.5.1 and the current default branch | Yes |
+| 0.5.0 preview and older releases | No; upgrade to the latest release |
 
 ## Reporting a vulnerability
 
