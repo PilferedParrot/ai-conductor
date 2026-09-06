@@ -21,7 +21,7 @@ Linux remains the stable, best-validated platform, with the strongest evidence o
 X11. Version 0.6.0 also provides a portable Windows 10/11 x64 preview. The Windows executable
 bundles Python, needs no administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 its console window open while it runs. Windows state is stored under `%LOCALAPPDATA%\PilferedParrot`
-and new projects default to `~/PilferedParrot Projects`.
+and new projects default to `%USERPROFILE%\PilferedParrot Projects`.
 
 Windows automated coverage includes browser interactions, platform integration, and executable
 startup. Real provider-account or provider-CLI validation is not claimed for Windows. Providers are installed and authenticated

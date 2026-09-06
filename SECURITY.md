@@ -29,7 +29,7 @@ boundary and can access PilferedParrot's state and local HTTP service.
 
 The Windows executable is a portable console application. It does not request administrator rights;
 the user must keep its console open while it runs. Windows state is kept under
-`%LOCALAPPDATA%\PilferedParrot`, and the default project directory is `~/PilferedParrot Projects`.
+`%LOCALAPPDATA%\PilferedParrot`, and the default project directory is `%USERPROFILE%\PilferedParrot Projects`.
 Windows uses the account's normal profile ACLs for these files; the owner-only mode wording elsewhere
 in this policy applies to POSIX systems. The preview package is currently unsigned; release downloads
 include SHA-256 checksums.
