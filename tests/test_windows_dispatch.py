@@ -32,7 +32,9 @@ class PortableDispatchTests(unittest.TestCase):
                 real_popen = spawn._mock_wraps
                 def start(*args, **kwargs):
                     child = real_popen(*args, **kwargs)
-                    children.append(child)
+                    # Windows also launches taskkill to stop the process tree.
+                    if args[0][0] == sys.executable:
+                        children.append(child)
                     return child
                 spawn.side_effect = start
                 try:
