@@ -227,8 +227,8 @@ class BrowserEndToEndTests(unittest.TestCase):
             buttons.first.click()
             expect(dialog).to_be_visible()
             expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
-            with self.page.expect_response("**/terminal") as rejected_response, \
-                 patch("pilferedparrot.web.subprocess.Popen") as popen:
+            with patch("pilferedparrot.web.subprocess.Popen") as popen, \
+                 self.page.expect_response("**/terminal") as rejected_response:
                 dialog.locator("#confirmTerminal").click()
             self.assertEqual(rejected_response.value.status, 400)
             expect(self.page.locator("#toast")).to_contain_text("requires a Unix shell")
@@ -241,8 +241,8 @@ class BrowserEndToEndTests(unittest.TestCase):
             expect(dialog.locator("#terminalCommand")).to_have_text(
                 "Write-Output 'accepted on Windows'",
             )
-            with self.page.expect_response("**/terminal") as accepted_response, \
-                 patch("pilferedparrot.web.subprocess.Popen") as popen:
+            with patch("pilferedparrot.web.subprocess.Popen") as popen, \
+                 self.page.expect_response("**/terminal") as accepted_response:
                 dialog.locator("#confirmTerminal").click()
             self.assertTrue(accepted_response.value.ok)
             expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
