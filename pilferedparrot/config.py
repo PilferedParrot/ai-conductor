@@ -5,6 +5,7 @@ import ipaddress
 import os
 import re
 import shutil
+import sys
 import tomllib
 import urllib.error
 import urllib.request
@@ -787,6 +788,38 @@ def _executable(candidate: Path) -> str | None:
     return str(candidate) if candidate.is_file() and os.access(candidate, os.X_OK) else None
 
 
+def _windows_command_dirs(config: dict[str, Any]) -> list[Path]:
+    values = [
+        os.environ.get("APPDATA", "") + "/npm",
+        os.environ.get("LOCALAPPDATA", "") + "/Microsoft/WinGet/Links",
+        "~/.local/bin",
+    ]
+    values.extend(str(item) for item in config.get("cli_search_paths") or ())
+    values.extend(os.environ.get("PATH", "").split(os.pathsep))
+    result: list[Path] = []
+    for raw in values:
+        if not raw or raw == "/npm":
+            continue
+        expanded = os.path.expandvars(os.path.expanduser(raw))
+        for directory in sorted(glob(expanded)) if any(c in expanded for c in "*?[") else [expanded]:
+            path = Path(directory)
+            if path not in result:
+                result.append(path)
+    return result
+
+
+def _windows_executable(directory: Path, command: str) -> str | None:
+    candidate = Path(command)
+    names = [command] if candidate.suffix.lower() in {".exe", ".cmd", ".bat"} else [
+        command + suffix for suffix in (".exe", ".cmd", ".bat")
+    ]
+    for name in names:
+        found = _executable(directory / name)
+        if found:
+            return found
+    return None
+
+
 def resolve_command(config: dict[str, Any], provider: str) -> str | None:
     """Locate a provider CLI, or return None when it genuinely is not installed.
 
@@ -798,11 +831,18 @@ def resolve_command(config: dict[str, Any], provider: str) -> str | None:
     PATH, because running the wrong CLI is worse than reporting it missing.
     """
     command = str(config[provider]["command"])
-    if os.sep in command or command.startswith("~"):
+    windows = sys.platform == "win32"
+    if (os.sep in command or (windows and ("/" in command or "\\" in command))
+            or command.startswith("~")):
         return _executable(Path(command).expanduser())
     found = shutil.which(command)
     if found:
         return found
+    if windows:
+        for directory in _windows_command_dirs(config):
+            found = _windows_executable(directory, command)
+            if found:
+                return found
     for pattern in config.get("cli_search_paths") or ():
         expanded = os.path.expanduser(str(pattern))
         directories = sorted(glob(expanded)) if any(c in expanded for c in "*?[") else [expanded]

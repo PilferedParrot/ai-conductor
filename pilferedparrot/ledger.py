@@ -49,7 +49,8 @@ def append_run(
     with _LEDGER_LOCK:
         descriptor = os.open(path, flags, 0o600)
         try:
-            os.fchmod(descriptor, 0o600)
+            if os.name == "posix":
+                os.fchmod(descriptor, 0o600)
             try:
                 import fcntl
                 fcntl.flock(descriptor, fcntl.LOCK_EX)

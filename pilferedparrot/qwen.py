@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import time
 import urllib.error
@@ -77,9 +78,11 @@ def _chat_completion(
         validate_qwen_endpoints(config)
     provider_config = config[provider]
     tools = TOOL_DEFINITIONS
+    if sys.platform == "win32":
+        tools = [tool for tool in tools if tool.get("function", {}).get("name") != "shell"]
     if provider_config.get("read_only"):
         tools = [
-            tool for tool in TOOL_DEFINITIONS
+            tool for tool in tools
             if tool.get("function", {}).get("name") in {"read_file", "diff"}
         ]
     payload = {

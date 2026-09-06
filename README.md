@@ -1,13 +1,15 @@
 # PilferedParrot Interface
 
-> **Stable Linux release · v0.5.1**
+> **v0.6.0 · stable Linux release and Windows 10/11 x64 preview**
 >
-> PilferedParrot Interface is a local Linux interface for coding CLIs and compatible local or remote
+> PilferedParrot Interface is a local interface for coding CLIs and compatible local or remote
 > models. It keeps the provider you choose visible while giving you one browser workspace for
 > technical work and provider-matched Chat.
 >
 > [Project page](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-> [v0.5.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.5.1) ·
+> [v0.6.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.0) ·
+> [Windows preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/PilferedParrot-0.6.0-windows-x64.zip) ·
+> [Source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/pilferedparrot-0.6.0-source.tar.gz) ·
 > [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 > [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -15,7 +17,17 @@
 
 *Synthetic conversation shown for illustration; no real account or chat data is included.*
 
-This stable release is intended for Linux. It has been best validated on Linux Mint with X11.
+Linux remains the stable, best-validated platform, with the strongest evidence on Linux Mint with
+X11. Version 0.6.0 also provides a portable Windows 10/11 x64 preview. The Windows executable
+bundles Python, needs no administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
+its console window open while it runs. Windows state is stored under `%LOCALAPPDATA%\PilferedParrot`
+and new projects default to `%USERPROFILE%\PilferedParrot Projects`.
+
+Windows automated coverage includes browser interactions, platform integration, and executable
+startup. Real provider-account or provider-CLI validation is not claimed for Windows. Providers are installed and authenticated
+separately. Browser Chat and file tools are available; the Bubblewrap shell is disabled on Windows.
+Supported npm provider shims are resolved directly through Node without invoking `cmd.exe`.
+
 Google Antigravity currently supports **Work** only; other provider accounts and compatible
 endpoints require your own setup and credentials. See [provider compatibility](docs/provider-compatibility.md)
 and the [provider validation notes](docs/provider-expansion-validation.md) for current limits.
@@ -25,7 +37,7 @@ and the [provider validation notes](docs/provider-expansion-validation.md) for c
 PilferedParrot is a local browser interface for coding engines and compatible model APIs:
 
 - **Local Qwen**, served through an OpenAI-compatible endpoint and equipped with contained file,
-  shell, and diff tools.
+  diff, and Linux shell tools.
 - **OpenAI Codex**, run through the authenticated Codex CLI with its normal model, sandbox, and
   approval behavior.
 - **Claude Code**, run through the authenticated Claude CLI in non-interactive print mode while
@@ -46,17 +58,35 @@ Antigravity currently supports Work only.
 It is an ordinary conversation kept separate from work sessions; it is not an interpreter or hidden
 router.
 
-The project targets Linux and Python 3.12 or later. Chrome or Chromium is the preferred browser.
-Bubblewrap is needed when a provider uses API or local shell tools; it is not needed just to open
-the browser interface. The Python application has no third-party package dependencies.
+The source project runs on Linux and Windows with Python 3.12 or later. Chrome or Chromium is the preferred
+Linux browser; the Windows preview also detects Microsoft Edge. Bubblewrap is needed when a Linux
+provider uses API or local shell tools; it is not needed just to open the browser interface and is
+disabled on Windows. The Python application has no third-party package dependencies.
 
 ## Install and configure
+
+### Windows preview
+
+Download `PilferedParrot-0.6.0-windows-x64.zip` from the [v0.6.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.0),
+extract it to a directory you control, and run `PilferedParrot.exe`. The portable package includes
+Python and does not require installation or administrator rights. Keep the console open while the
+interface is running. On first launch, the app creates
+`%LOCALAPPDATA%\PilferedParrot\config.json`; edit that generated file when customizing providers
+and preserve its `web.chat_store` and `ledger` paths. The bundled `config.example.json` is a
+reference for provider options, not a replacement for the generated config. Install and configure
+any provider CLI, Node.js, or local model server separately.
+
+For a Windows source checkout, install Python 3.12 or newer and run `python -m pilferedparrot`
+from the repository, or run `PilferedParrot.cmd`. The source launcher checks the Python version and
+passes arguments to the Windows entry point; it does not bundle Python.
+
+### Linux release
 
 On a Linux machine with Python 3.12 or later and Chrome or Chromium installed, open a terminal and
 run:
 
 ```bash
-git clone --branch v0.5.1 https://github.com/PilferedParrot/PilferedParrot-Interface.git PilferedParrot-Interface
+git clone --branch v0.6.0 https://github.com/PilferedParrot/PilferedParrot-Interface.git PilferedParrot-Interface
 cd PilferedParrot-Interface
 cp config.example.json config.json
 ```
@@ -114,6 +144,7 @@ PilferedParrot's dedicated browser profile. PilferedParrot runs as a private Chr
 this control does not change the Chrome theme used for normal browsing. The selected theme persists for the main app window and
 PilferedParrot applies its colors and available new-tab background artwork when the user returns to
 the app. The isolated Chat window uses the same selected theme without sharing browser state.
+Chrome theme installation requires Chrome or Chromium; it is unavailable when using Edge.
 
 The model picker sits beside **Reasoning** at the bottom of the composer in both work and Chat.
 For Codex, choose a supported effort for the next message; the choice is saved with that session
