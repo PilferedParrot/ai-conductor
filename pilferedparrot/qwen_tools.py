@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from collections.abc import Sequence
 from pathlib import Path
 from typing import Any
@@ -253,6 +254,11 @@ class QwenToolbox:
         return rendered or f"{relative}: no change"
 
     def _shell(self, command: str, timeout_seconds: int | None = None) -> str:
+        if sys.platform == "win32":
+            raise RuntimeError(
+                "Sandboxed shell tools require Linux and Bubblewrap; Windows supports "
+                "file tools and diff. Use a native coding CLI for shell commands."
+            )
         if not isinstance(command, str) or not command.strip():
             raise ValueError("command must be a non-empty string")
         timeout = self.shell_timeout if timeout_seconds is None else int(timeout_seconds)
@@ -326,11 +332,14 @@ class QwenToolbox:
             target = self._path(path)
             root = self._root_for(target) or self.cwd
             pathspec = ["--", str(target.relative_to(root))]
-        probe = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            text=True, capture_output=True,
-        )
-        if probe.returncode:
+        try:
+            probe = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                text=True, encoding="utf-8", errors="replace", capture_output=True,
+            )
+        except FileNotFoundError:
+            probe = None
+        if probe is None or probe.returncode:
             changed_paths = self._baselines
             if path:
                 changed_paths = {
@@ -338,7 +347,8 @@ class QwenToolbox:
                     if changed == target or target in changed.parents
                 }
             rendered = [self._file_diff(changed) for changed in changed_paths]
-            return "\n".join(rendered) if rendered else "workspace is not a Git repository; no file-tool changes yet"
+            reason = "Git is not installed" if probe is None else "workspace is not a Git repository"
+            return "\n".join(rendered) if rendered else f"{reason}; no file-tool changes yet"
         commands = [
             ["git", "-C", str(root), "status", "--short", *pathspec],
             ["git", "-C", str(root), "diff", "--no-ext-diff", "--no-color", *pathspec],
@@ -346,7 +356,7 @@ class QwenToolbox:
         ]
         sections: list[str] = []
         for command in commands:
-            completed = subprocess.run(command, text=True, capture_output=True)
+            completed = subprocess.run(command, text=True, encoding="utf-8", errors="replace", capture_output=True)
             text = completed.stdout.rstrip()
             if text:
                 sections.append(text)

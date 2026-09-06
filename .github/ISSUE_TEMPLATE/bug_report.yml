@@ -1,5 +1,5 @@
 name: Bug report
-description: Report a reproducible problem in the Linux release.
+description: Report a reproducible problem in PilferedParrot, including the Windows preview.
 title: "[Bug] "
 labels:
   - bug
@@ -12,8 +12,8 @@ body:
     id: platform
     attributes:
       label: Platform
-      description: Include Linux distribution, desktop session, and whether you use X11 or Wayland.
-      placeholder: Linux Mint 22, Cinnamon, X11
+      description: Include OS, architecture, desktop/session details, and whether this is the portable Windows preview.
+      placeholder: Linux Mint 22, Cinnamon, X11; or Windows 11 x64, portable ZIP
     validations:
       required: true
   - type: input
@@ -29,7 +29,7 @@ body:
     attributes:
       label: PilferedParrot version
       description: Include the release tag or commit and relevant CLI/browser versions.
-      placeholder: v0.5.1; Chrome 140; provider CLI version
+      placeholder: v0.6.0; Chrome/Edge version; provider CLI version
     validations:
       required: true
   - type: textarea

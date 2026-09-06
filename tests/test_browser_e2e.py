@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import re
+import sys
 import unittest
 from urllib.parse import urlparse
 from unittest.mock import patch
@@ -160,6 +161,8 @@ class BrowserEndToEndTests(unittest.TestCase):
             "```bash\necho first\n```\n"
             "```sh\none\ntwo\n```\n"
             "```\necho second\n```"
+            + ("\n```powershell\nWrite-Output 'accepted on Windows'\n```"
+               if sys.platform == "win32" else "")
         )
         with self.fixture.app.store.lock:
             work_chat = self.fixture.app.store.data["chats"][0]
@@ -211,18 +214,48 @@ class BrowserEndToEndTests(unittest.TestCase):
 
         command_message = self.page.locator("article.message.assistant").nth(1)
         buttons = command_message.locator("[data-run-command]")
-        expect(buttons).to_have_count(2)
-        self.assertEqual(buttons.evaluate_all("nodes => nodes.map(node => node.dataset.blockIndex)"), ["1", "3"])
+        expected_blocks = ["1", "3"]
+        if sys.platform == "win32":
+            expected_blocks.append("4")
+        expect(buttons).to_have_count(len(expected_blocks))
+        self.assertEqual(buttons.evaluate_all("nodes => nodes.map(node => node.dataset.blockIndex)"), expected_blocks)
         expect(self.page.locator("article.message.user [data-run-command]")).to_have_count(0)
-        buttons.first.click()
         dialog = self.page.locator("#terminalDialog")
-        expect(dialog).to_be_visible()
-        expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
-        with patch("pilferedparrot.web._terminal_argv", return_value=["terminal"]), \
-             patch("pilferedparrot.web.subprocess.Popen") as popen:
-            dialog.locator("#confirmTerminal").click()
+        if sys.platform == "win32":
+            # Windows deliberately rejects Unix shell fences at the server
+            # boundary, even though the markdown action remains visible.
+            buttons.first.click()
+            expect(dialog).to_be_visible()
+            expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
+            with patch("pilferedparrot.web.subprocess.Popen") as popen, \
+                 self.page.expect_response("**/terminal") as rejected_response:
+                dialog.locator("#confirmTerminal").click()
+            self.assertEqual(rejected_response.value.status, 400)
+            expect(self.page.locator("#toast")).to_contain_text("requires a Unix shell")
+            popen.assert_not_called()
+            dialog.get_by_role("button", name="Cancel").click()
+
+            # A single stored PowerShell command is accepted; Popen stays
+            # mocked so this browser test never opens a real terminal.
+            buttons.nth(2).click()
+            expect(dialog.locator("#terminalCommand")).to_have_text(
+                "Write-Output 'accepted on Windows'",
+            )
+            with patch("pilferedparrot.web.subprocess.Popen") as popen, \
+                 self.page.expect_response("**/terminal") as accepted_response:
+                dialog.locator("#confirmTerminal").click()
+            self.assertTrue(accepted_response.value.ok)
             expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
-        self.assertTrue(popen.called)
+            self.assertTrue(popen.called)
+        else:
+            buttons.first.click()
+            expect(dialog).to_be_visible()
+            expect(dialog.locator("#terminalCommand")).to_have_text("echo first")
+            with patch("pilferedparrot.web._terminal_argv", return_value=["terminal"]), \
+                 patch("pilferedparrot.web.subprocess.Popen") as popen:
+                dialog.locator("#confirmTerminal").click()
+                expect(self.page.locator("#toast")).to_contain_text("Opened command in a terminal.")
+            self.assertTrue(popen.called)
 
     def test_markdown_edge_cases_do_not_create_quoted_or_malformed_actions(self):
         content = (

@@ -219,6 +219,10 @@ class OnboardingBrowserEndToEndTests(unittest.TestCase):
             expect(project_input).to_have_value(selected)
             expect(folder_name).to_have_text("picked-project")
 
+        # Windows separators must also render a basename on every test host.
+        project_input.fill("C:\\Projects\\parrot\\")
+        expect(folder_name).to_have_text("parrot")
+
         unsafe_path = "/tmp/<img src=x onerror=alert(1)>/"
         project_input.fill(unsafe_path)
         expect(folder_name).to_have_text("<img src=x onerror=alert(1)>")
