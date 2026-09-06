@@ -7,7 +7,7 @@ and
 [`pilferedparrot-0.6.0-source.tar.gz`](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/pilferedparrot-0.6.0-source.tar.gz).
 The Windows package bundles Python, requires no administrator rights, uses Chrome/Chromium/Edge,
 keeps state under `%LOCALAPPDATA%\PilferedParrot`, and defaults projects to
-`~/PilferedParrot Projects`. Its console remains part of the app lifetime.
+`%USERPROFILE%\PilferedParrot Projects`. Its console remains part of the app lifetime.
 
 Release validation covers 480 local tests with mandatory Playwright, Windows browser and platform
 checks, and a native executable smoke test on the Windows Server 2022 runner. No real Windows provider account,

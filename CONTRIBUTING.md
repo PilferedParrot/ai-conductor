@@ -17,7 +17,9 @@ From a Windows source checkout, run `python -m pilferedparrot` or `PilferedParro
 3.12 or newer. Run the focused Windows packaging and entry-point checks with
 `python -m unittest discover -s tests -p 'test_windows*.py' -v`.
 Build the preview ZIP from a Windows PowerShell session with
-`.\packaging\windows\build.ps1`; the script writes the ZIP and `SHA256SUMS` under `dist`.
+`.\packaging\windows\build.ps1`; the script writes the ZIP and its checksum to `SHA256SUMS` under
+`dist`. When preparing the final release, add the source archive checksum to that release
+`SHA256SUMS` file as well.
 The preview package is currently unsigned, so Windows may show an unverified-publisher warning.
 
 ```bash
