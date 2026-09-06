@@ -90,6 +90,14 @@ class WindowsEntrypointTests(unittest.TestCase):
                     toolbox._shell("echo unsafe")
                 run.assert_not_called()
 
+    def test_file_tool_diff_works_without_a_git_installation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            toolbox = QwenToolbox(Path(directory), DEFAULTS["qwen"])
+            with patch("pilferedparrot.qwen_tools.subprocess.run", side_effect=FileNotFoundError):
+                self.assertIn("Git is not installed", toolbox._diff())
+                toolbox._write_file("parrot.txt", "hello parrot\n")
+                self.assertIn("+hello parrot", toolbox._diff())
+
 
 if __name__ == "__main__":
     unittest.main()

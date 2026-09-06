@@ -1618,9 +1618,9 @@ function openProjectDialog(needsChoice) {
 function projectFolderName(path) {
   const value = String(path || "").trim();
   if (!value) return "No folder selected";
-  const withoutTrailingSeparators = value.replace(/\/+$/, "");
+  const withoutTrailingSeparators = value.replace(/[\\/]+$/, "");
   if (!withoutTrailingSeparators) return value;
-  const segments = withoutTrailingSeparators.split("/");
+  const segments = withoutTrailingSeparators.split(/[\\/]/);
   return segments[segments.length - 1] || withoutTrailingSeparators;
 }
 function updateProjectFolderName() {

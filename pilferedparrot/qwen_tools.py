@@ -332,11 +332,14 @@ class QwenToolbox:
             target = self._path(path)
             root = self._root_for(target) or self.cwd
             pathspec = ["--", str(target.relative_to(root))]
-        probe = subprocess.run(
-            ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
-            text=True, encoding="utf-8", errors="replace", capture_output=True,
-        )
-        if probe.returncode:
+        try:
+            probe = subprocess.run(
+                ["git", "-C", str(root), "rev-parse", "--show-toplevel"],
+                text=True, encoding="utf-8", errors="replace", capture_output=True,
+            )
+        except FileNotFoundError:
+            probe = None
+        if probe is None or probe.returncode:
             changed_paths = self._baselines
             if path:
                 changed_paths = {
@@ -344,7 +347,8 @@ class QwenToolbox:
                     if changed == target or target in changed.parents
                 }
             rendered = [self._file_diff(changed) for changed in changed_paths]
-            return "\n".join(rendered) if rendered else "workspace is not a Git repository; no file-tool changes yet"
+            reason = "Git is not installed" if probe is None else "workspace is not a Git repository"
+            return "\n".join(rendered) if rendered else f"{reason}; no file-tool changes yet"
         commands = [
             ["git", "-C", str(root), "status", "--short", *pathspec],
             ["git", "-C", str(root), "diff", "--no-ext-diff", "--no-color", *pathspec],
