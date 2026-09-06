@@ -23,8 +23,8 @@ bundles Python, needs no administrator rights, and uses Chrome, Chromium, or Mic
 its console window open while it runs. Windows state is stored under `%LOCALAPPDATA%\PilferedParrot`
 and new projects default to `~/PilferedParrot Projects`.
 
-The Windows preview has CI/source coverage pending final lead verification; no real provider account
-or provider CLI validation is claimed for Windows. Providers are installed and authenticated
+Windows automated coverage includes browser interactions, platform integration, and executable
+startup. Real provider-account or provider-CLI validation is not claimed for Windows. Providers are installed and authenticated
 separately. Browser Chat and file tools are available; the Bubblewrap shell is disabled on Windows.
 Supported npm provider shims are resolved directly through Node without invoking `cmd.exe`.
 

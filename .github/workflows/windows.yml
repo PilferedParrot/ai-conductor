@@ -48,9 +48,12 @@ jobs:
       - name: Smoke test executable
         shell: pwsh
         run: |
-          ./dist/PilferedParrot-0.6.0-windows-x64/PilferedParrot.exe --help
+          $SmokeDirectory = Join-Path $env:RUNNER_TEMP "Pilfered Parrot extracted"
+          Expand-Archive ./dist/PilferedParrot-0.6.0-windows-x64.zip -DestinationPath $SmokeDirectory
+          $Executable = Join-Path $SmokeDirectory "PilferedParrot.exe"
+          & $Executable --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./dist/PilferedParrot-0.6.0-windows-x64/PilferedParrot.exe --self-test
+          & $Executable --self-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Run production browser checks
         shell: pwsh

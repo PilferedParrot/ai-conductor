@@ -1,19 +1,24 @@
 # PilferedParrot Interface 0.6.0 release notes
 
 PilferedParrot Interface 0.6.0 keeps the stable Linux release and adds a portable Windows 10/11
-x64 preview. The planned Windows asset is
+x64 preview. The Windows asset is
 [`PilferedParrot-0.6.0-windows-x64.zip`](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/PilferedParrot-0.6.0-windows-x64.zip);
-the planned source asset is
+the source asset is
 [`pilferedparrot-0.6.0-source.tar.gz`](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/pilferedparrot-0.6.0-source.tar.gz).
 The Windows package is portable and bundles Python, requires no administrator rights, opens with
 Chrome, Chromium, or Edge, and keeps application state under `%LOCALAPPDATA%\PilferedParrot`.
 Its default project directory is `~/PilferedParrot Projects`; keep the console window open while
 the application runs.
 
+The native folder picker recognizes Windows paths, terminal actions use PowerShell, and provider
+cancellation stops the Windows process tree. File-tool diffs also work without a Git installation;
+full repository status and diffs use Git when available. The ZIP includes runtime license notices
+and is distributed with SHA-256 checksums. This preview executable is unsigned.
+
 Windows providers remain separately installed and configured. The preview supports browser Chat
 and file tools, disables the Bubblewrap shell, and resolves supported npm shims through Node
-without `cmd.exe`. Automated Windows preview checks are pending final lead verification; this
-release makes no claim of real Windows provider-account or provider-CLI validation. Linux provider
+without `cmd.exe`. Windows CI covers browser interactions, platform checks, and the bundled executable.
+This release makes no claim of real Windows provider-account or provider-CLI validation. Linux provider
 evidence below remains unchanged.
 
 ## 0.5.1 history

@@ -63,7 +63,8 @@ listed in that diagnostic using your distribution’s package manager, then reru
 - Fork the repository, create a focused branch, and open a pull request for every contribution.
 - External contributions require owner review. Any approval is dismissed when new commits are
   pushed; the latest push must be reviewed before merge.
-- A pull request must pass all four required CI checks and have every discussion resolved.
+- A pull request must pass all five required CI checks (Python 3.12/3.13/3.14, Playwright Chromium,
+  and Windows x64) and have every discussion resolved.
   CodeQL must complete without code-scanning errors or high/critical security findings.
 - The sole maintainer may use the admin-only pull request path for their own changes, but those
   changes must still pass all required CI checks.

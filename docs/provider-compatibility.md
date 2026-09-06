@@ -24,7 +24,7 @@ configured. Browser Chat and file tools are supported in the preview. The Bubble
 disabled on Windows, and supported npm `.cmd` shims are resolved to their package entry points and
 run through Node without invoking `cmd.exe`.
 
-The Windows preview has CI/source coverage pending final lead verification. No real Windows
+The Windows preview has automated browser, platform, and executable checks. No real Windows
 provider account, CLI, or model validation is claimed. The provider rows and live results below
 therefore describe integration behavior and Linux or synthetic evidence where stated, not a
 Windows certification.
