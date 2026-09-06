@@ -37,7 +37,7 @@ and the [provider validation notes](docs/provider-expansion-validation.md) for c
 PilferedParrot is a local browser interface for coding engines and compatible model APIs:
 
 - **Local Qwen**, served through an OpenAI-compatible endpoint and equipped with contained file,
-  shell, and diff tools.
+  diff, and Linux shell tools.
 - **OpenAI Codex**, run through the authenticated Codex CLI with its normal model, sandbox, and
   approval behavior.
 - **Claude Code**, run through the authenticated Claude CLI in non-interactive print mode while
@@ -58,7 +58,7 @@ Antigravity currently supports Work only.
 It is an ordinary conversation kept separate from work sessions; it is not an interpreter or hidden
 router.
 
-The source project targets Linux and Python 3.12 or later. Chrome or Chromium is the preferred
+The source project runs on Linux and Windows with Python 3.12 or later. Chrome or Chromium is the preferred
 Linux browser; the Windows preview also detects Microsoft Edge. Bubblewrap is needed when a Linux
 provider uses API or local shell tools; it is not needed just to open the browser interface and is
 disabled on Windows. The Python application has no third-party package dependencies.
@@ -144,6 +144,7 @@ PilferedParrot's dedicated browser profile. PilferedParrot runs as a private Chr
 this control does not change the Chrome theme used for normal browsing. The selected theme persists for the main app window and
 PilferedParrot applies its colors and available new-tab background artwork when the user returns to
 the app. The isolated Chat window uses the same selected theme without sharing browser state.
+Chrome theme installation requires Chrome or Chromium; it is unavailable when using Edge.
 
 The model picker sits beside **Reasoning** at the bottom of the composer in both work and Chat.
 For Codex, choose a supported effort for the next message; the choice is saved with that session

@@ -7,8 +7,8 @@ release lines are not supported.
 
 | Version | Supported |
 | --- | --- |
-| 0.6.0 Windows preview, 0.5.1 Linux release, and the current default branch | Yes |
-| 0.5.0 preview and older releases | No; upgrade to the latest release |
+| 0.6.0 (Linux and Windows preview) and the current default branch | Yes |
+| 0.5.x and older releases | No; upgrade to the latest release |
 
 ## Reporting a vulnerability
 
@@ -31,8 +31,8 @@ The Windows executable is a portable console application. It does not request ad
 the user must keep its console open while it runs. Windows state is kept under
 `%LOCALAPPDATA%\PilferedParrot`, and the default project directory is `~/PilferedParrot Projects`.
 Windows uses the account's normal profile ACLs for these files; the owner-only mode wording elsewhere
-in this policy applies to POSIX systems. The preview package is currently unsigned, so verify its
-source and checksum before running it if your Windows policy requires signed binaries.
+in this policy applies to POSIX systems. The preview package is currently unsigned; release downloads
+include SHA-256 checksums.
 Windows disables the Bubblewrap shell. Supported npm provider shims are resolved to their package
 entry point and run through Node without passing arbitrary batch files to `cmd.exe`; provider CLIs
 retain their own authentication, permissions, and network behavior.

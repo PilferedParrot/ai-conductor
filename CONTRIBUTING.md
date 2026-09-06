@@ -15,7 +15,7 @@ assets; provider CLIs and model servers are not bundled.
 
 From a Windows source checkout, run `python -m pilferedparrot` or `PilferedParrot.cmd` with Python
 3.12 or newer. Run the focused Windows packaging and entry-point checks with
-`python -m unittest tests.test_windows_package tests.test_windows_entrypoint tests.test_windows_processes tests.test_windows_desktop`.
+`python -m unittest discover -s tests -p 'test_windows*.py' -v`.
 Build the preview ZIP from a Windows PowerShell session with
 `.\packaging\windows\build.ps1`; the script writes the ZIP and `SHA256SUMS` under `dist`.
 The preview package is currently unsigned, so Windows may show an unverified-publisher warning.

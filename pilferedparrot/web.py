@@ -516,6 +516,11 @@ def _pilferedparrot_is_running(url: str) -> bool:
 
 
 def _terminate_stale_pilferedparrot(url: str, port: int) -> None:
+    if sys.platform == "win32":
+        raise RuntimeError(
+            "An older PilferedParrot is still running. Close its console window "
+            "and start the new version again."
+        )
     _server.terminate_stale_pilferedparrot(
         url, port, status=_pilferedparrot_status, which=shutil.which,
         runner=subprocess.run, monotonic=time.monotonic, sleeper=time.sleep,

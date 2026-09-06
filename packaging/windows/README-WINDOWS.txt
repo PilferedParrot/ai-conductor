@@ -4,6 +4,8 @@ PilferedParrot for Windows
 This is the PilferedParrot 0.6.0 Windows preview for Windows 10/11 x64.
 The ZIP is portable: extract it anywhere and run PilferedParrot.exe.
 No Python installation or administrator rights are required.
+Install Google Chrome, Chromium, or Microsoft Edge to open the interface.
+This preview executable is unsigned. SHA256SUMS is available with the release.
 
 The first run opens the local browser interface. Keep the console window open
 while the app is running. Use PilferedParrot.exe --help for command-line
@@ -25,3 +27,4 @@ are resolved directly without cmd.exe.
 
 This is a Windows x64 build. Keep the extracted directory together; do not
 move or delete its internal files while the application is running.
+Close the running application before extracting and launching an updated version.

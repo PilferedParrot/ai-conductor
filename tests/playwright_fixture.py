@@ -147,7 +147,10 @@ class PilferedParrotBrowserFixture:
     def __init__(self, *, include_claude: bool = False) -> None:
         self.include_claude = include_claude
         self._temporary = tempfile.TemporaryDirectory(prefix="pilferedparrot-browser-")
-        self.root = Path(self._temporary.name)
+        # Windows may expose the temporary directory through an 8.3 alias;
+        # production resolves project paths before storing them. Keep the
+        # fixture's expected paths in the same canonical form.
+        self.root = Path(self._temporary.name).resolve()
         self.project = self.root / "project"
         self.project.mkdir()
         self.provider = FakeProvider()
