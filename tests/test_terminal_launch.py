@@ -70,7 +70,7 @@ class TerminalCommandTests(unittest.TestCase):
                 app.launch_terminal_command(chat["id"], {
                     "message_id": "assistant-1", "block_index": 0,
                 })
-            launch.assert_called_once_with("sudo apt update", Path(directory))
+            launch.assert_called_once_with("sudo apt update", Path(directory).resolve())
 
     def test_launch_rejects_multiline_and_non_assistant_blocks(self):
         with tempfile.TemporaryDirectory() as directory:

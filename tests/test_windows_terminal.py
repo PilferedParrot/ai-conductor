@@ -58,15 +58,27 @@ class WindowsTerminalTests(unittest.TestCase):
                 "cwd=(Get-Location).Path} | ConvertTo-Json | "
                 "Set-Content -LiteralPath 'console.json' -Encoding UTF8; exit"
             )
-            launch_terminal(command, root)
-            deadline = time.monotonic() + 15
-            while not report.exists() and time.monotonic() < deadline:
-                time.sleep(.1)
+            real_popen = subprocess.Popen
+            children = []
+
+            def spawn(*args, **kwargs):
+                child = real_popen(*args, **kwargs)
+                children.append(child)
+                return child
+
+            with patch("pilferedparrot.terminal.subprocess.Popen", side_effect=spawn):
+                launch_terminal(command, root)
+            try:
+                self.assertEqual(children[0].wait(timeout=15), 0)
+            finally:
+                if children[0].poll() is None:
+                    children[0].kill()
+                    children[0].wait(timeout=5)
             self.assertTrue(report.exists(), "PowerShell did not execute in the new console")
             data = json.loads(report.read_text(encoding="utf-8-sig"))
             self.assertFalse(data["inputRedirected"])
             self.assertFalse(data["outputRedirected"])
-            self.assertEqual(Path(data["cwd"]), root)
+            self.assertEqual(Path(data["cwd"]).resolve(), root.resolve())
 
     def test_windows_spawn_uses_a_new_console_without_stdio_redirection(self):
         with patch("pilferedparrot.terminal.sys.platform", "win32"), \
