@@ -191,8 +191,11 @@ class ReasoningBrowserEndToEndTests(unittest.TestCase):
         self.assertEqual(request.value.post_data_json["reasoning_effort"], "high")
         expect(chat.locator("article.chat-message.assistant").last).to_contain_text(prompt, timeout=5_000)
         self.assertEqual(self.fixture.provider.configs[-1]["codex"]["reasoning_effort"], "high")
-        chat.get_by_role("button", name="Start a new chat").click()
+        with chat.expect_response("**/api/chat/reset") as response:
+            chat.get_by_role("button", name="Start a new chat").click()
+        self.assertTrue(response.value.ok)
         old = chat.get_by_role("button", name=re.compile(r"^chat reasoning dispatch"))
+        expect(old).to_contain_text("Archived")
         old.click()
         expect(chat.locator("#chatReasoningSelect")).to_be_disabled()
 
