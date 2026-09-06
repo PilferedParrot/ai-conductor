@@ -2,6 +2,10 @@
 
 > **v0.6.0 · stable Linux release and Windows 10/11 x64 preview**
 >
+> The 0.6.1 source candidate fixes terminal visibility and shows the working folder and exact
+> command before execution. See [release notes](RELEASE_NOTES.md); downloads below remain 0.6.0
+> until the patch release is published.
+>
 > PilferedParrot Interface is a local interface for coding CLIs and compatible local or remote
 > models. It keeps the provider you choose visible while giving you one browser workspace for
 > technical work and provider-matched Chat.

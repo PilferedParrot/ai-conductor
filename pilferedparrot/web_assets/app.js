@@ -1283,6 +1283,9 @@ async function confirmTerminalCommand() {
   if (!target) return;
   target.button.disabled = true;
   $("#confirmTerminal").disabled = true;
+  // Restore browser focus before the native terminal opens, so closing the
+  // dialog cannot subsequently bring PPI back in front of the password prompt.
+  $("#terminalDialog").close();
   try {
     await api(`/api/chats/${encodeURIComponent(target.chatId)}/terminal`, {
       method: "POST",
@@ -1291,9 +1294,10 @@ async function confirmTerminalCommand() {
         block_index: target.blockIndex,
       }),
     });
-    $("#terminalDialog").close();
     toast("Opened command in a terminal.");
   } catch (error) {
+    terminalTarget = target;
+    $("#terminalDialog").showModal();
     toast(error.message);
   } finally {
     if (target.button.isConnected) target.button.disabled = false;
@@ -1706,7 +1710,9 @@ $("#terminalForm").addEventListener("submit", (event) => {
   event.preventDefault();
   confirmTerminalCommand();
 });
-$("#terminalDialog").addEventListener("close", () => { terminalTarget = null; });
+$("#terminalDialog").addEventListener("close", () => {
+  if (!$("#terminalDialog").open) terminalTarget = null;
+});
 $("#providerConnectionList").addEventListener("click", async (event) => {
   const windowButton = event.target.closest("[data-provider-window]");
   const login = event.target.closest("[data-provider-login]");

@@ -1,3 +1,11 @@
+# PilferedParrot Interface 0.6.1 release candidate
+
+Version 0.6.1 is a candidate pending validation. Terminal actions request a normal-size visible
+Linux window, show the exact working folder and command before execution or a sudo prompt, and
+provide the same display behavior on Windows. Windows terminal launches retain console input and
+output. The terminal dialog closes before launch; window focus is best effort and depends on the
+desktop and window manager.
+
 # PilferedParrot Interface 0.6.0 release notes
 
 PilferedParrot Interface 0.6.0 keeps the stable Linux release and adds a portable Windows 10/11

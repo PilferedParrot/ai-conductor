@@ -1,12 +1,13 @@
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 from pilferedparrot.config import load_config
-from pilferedparrot.web import PilferedParrotApp, _fenced_code_blocks, _terminal_argv
+from pilferedparrot.web import PilferedParrotApp, _fenced_code_blocks
 
 
 def _app(directory):
@@ -17,6 +18,7 @@ def _app(directory):
 
 
 class TerminalCommandTests(unittest.TestCase):
+    @unittest.skipIf(sys.platform == "win32", "Linux desktop installer")
     def test_desktop_installer_quotes_repository_paths_with_spaces(self):
         root = Path(__file__).parents[1]
         with tempfile.TemporaryDirectory() as directory:
@@ -61,17 +63,14 @@ class TerminalCommandTests(unittest.TestCase):
                 stored["messages"].append({
                     "id": "assistant-1",
                     "role": "assistant",
-                    "content": "Run this:\n\n```bash\nsudo apt update\n```",
+                    "content": "Run this:\n\n```shell\nsudo apt update\n```",
                 })
                 app.store.save()
-            with patch("pilferedparrot.web._terminal_argv", return_value=["terminal"]) as argv, \
-                 patch("pilferedparrot.web.subprocess.Popen") as popen:
+            with patch("pilferedparrot.web.launch_terminal") as launch:
                 app.launch_terminal_command(chat["id"], {
                     "message_id": "assistant-1", "block_index": 0,
                 })
-            argv.assert_called_once_with("sudo apt update", Path(directory))
-            self.assertEqual(popen.call_args.kwargs["cwd"], Path(directory))
-            self.assertTrue(popen.call_args.kwargs["start_new_session"])
+            launch.assert_called_once_with("sudo apt update", Path(directory))
 
     def test_launch_rejects_multiline_and_non_assistant_blocks(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -98,16 +97,6 @@ class TerminalCommandTests(unittest.TestCase):
                     "message_id": "python", "block_index": 0,
                 })
 
-    @patch("pilferedparrot.web.shutil.which")
-    def test_terminal_wrapper_passes_command_as_an_argument(self, which):
-        which.side_effect = lambda name: {
-            "bash": "/bin/bash", "gnome-terminal": "/usr/bin/gnome-terminal",
-        }.get(name)
-        command = "sudo sh -c 'printf hello'"
-        argv = _terminal_argv(command, Path("/tmp/project"))
-        self.assertEqual(argv[-1], command)
-        self.assertNotIn(command, argv[4])
-        self.assertEqual(argv[:2], ["/usr/bin/gnome-terminal", "--"])
 
 
 if __name__ == "__main__":

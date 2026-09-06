@@ -64,8 +64,14 @@ class WindowsEntrypointTests(unittest.TestCase):
         with patch("pilferedparrot.web.sys.platform", "win32"), \
                 patch("pilferedparrot.web.shutil.which", return_value="powershell.exe"):
             argv = _terminal_argv(command, Path("project"))
-        self.assertEqual(argv[:-1], ["powershell.exe", "-NoLogo", "-NoProfile", "-NoExit", "-EncodedCommand"])
-        self.assertEqual(base64.b64decode(argv[-1]).decode("utf-16-le"), command)
+        self.assertEqual(argv[:-1], [
+            "powershell.exe", "-NoLogo", "-NoProfile", "-NoExit",
+            "-WindowStyle", "Normal", "-EncodedCommand",
+        ])
+        wrapper = base64.b64decode(argv[-1]).decode("utf-16-le")
+        self.assertIn("Set-Location -LiteralPath $cwd -ErrorAction Stop", wrapper)
+        self.assertIn("Invoke-Expression -Command $command", wrapper)
+        self.assertNotIn(command, wrapper)
 
     def test_windows_compatible_tools_exclude_shell_and_enforce_read_only(self):
         config = deepcopy(DEFAULTS)
