@@ -1,4 +1,29 @@
-# PilferedParrot Interface 0.5.1 release readiness — 2026-09-05
+# PilferedParrot Interface 0.6.0 release readiness — 2026-09-05
+
+Version 0.6.0 retains the stable Linux release and adds a portable Windows 10/11 x64 preview.
+Release assets are
+[`PilferedParrot-0.6.0-windows-x64.zip`](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/PilferedParrot-0.6.0-windows-x64.zip)
+and
+[`pilferedparrot-0.6.0-source.tar.gz`](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/pilferedparrot-0.6.0-source.tar.gz).
+The Windows package bundles Python, requires no administrator rights, uses Chrome/Chromium/Edge,
+keeps state under `%LOCALAPPDATA%\PilferedParrot`, and defaults projects to
+`~/PilferedParrot Projects`. Its console remains part of the app lifetime.
+
+Release validation covers 480 local tests with mandatory Playwright, Windows browser and platform
+checks, and a native executable smoke test on the Windows Server 2022 runner. No real Windows provider account,
+provider CLI, or model validation is claimed. The preview supports browser Chat and file tools;
+Bubblewrap shell execution is disabled, and supported npm provider shims are resolved through Node
+without `cmd.exe`. The 0.5.1 Linux validation record below is retained unchanged.
+
+The [Windows release candidate checks](https://github.com/PilferedParrot/PilferedParrot-Interface/actions/runs/34000685450)
+passed all 34 platform tests, all 33 browser tests, the applicable process-cleanup checks,
+the source launcher, and the bundled executable self-test. The four POSIX-only cleanup checks
+are intentionally skipped on Windows. The local Linux suite passed all 480 tests with no skips.
+The landing page passed image, script-error, and overflow checks at 1440, 390, and 320 pixels.
+Windows x64 is now a required check alongside the three Python versions, Linux Playwright,
+and the existing CodeQL security requirement.
+
+## 0.5.1 historical readiness record
 
 The interface and desktop integrations have passed automated and live validation on
 Linux Mint/X11. These checks describe the local source validation checkpoint; provider access remains

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -27,14 +28,41 @@ CHROME_THEME_ID = re.compile(r"[a-p]{32}")
 CHROME_THEME_COLOR_KEYS = ("frame", "toolbar", "ntp_text", "ntp_link", "ntp_section")
 CHROME_THEME_IMAGE_MAX_BYTES = 16 * 1024 * 1024
 _DISCOVER_BROWSER = object()
+WINDOWS = sys.platform == "win32"
+
+
+def _windows_browser_candidates() -> list[Path]:
+    """Return installed Windows browser paths in the preferred order."""
+    roots: list[Path] = []
+    for variable in ("ProgramFiles", "ProgramFiles(x86)", "LOCALAPPDATA"):
+        value = os.environ.get(variable)
+        if value:
+            roots.append(Path(value))
+    candidates: list[Path] = []
+    for root in roots:
+        candidates.extend((
+            root / "Google/Chrome/Application/chrome.exe",
+            root / "Chromium/Application/chrome.exe",
+            root / "Chromium/Application/chromium.exe",
+        ))
+    for root in roots:
+        candidates.append(root / "Microsoft/Edge/Application/msedge.exe")
+    return candidates
 
 
 def chromium_browser() -> str | None:
     """Return the same preferred Chrome-family browser used by the app launcher."""
-    return next((
-        path for candidate in CHROMIUM_BROWSER_CANDIDATES
-        if (path := shutil.which(candidate))
-    ), None)
+    if not WINDOWS:
+        return next((
+            path for candidate in CHROMIUM_BROWSER_CANDIDATES
+            if (path := shutil.which(candidate))
+        ), None)
+    for candidate in (
+        "chrome.exe", "chrome", "chromium.exe", "chromium", "msedge.exe", "msedge",
+    ):
+        if path := shutil.which(candidate):
+            return path
+    return next((str(path) for path in _windows_browser_candidates() if path.is_file()), None)
 
 
 def _active_x11_window() -> str | None:
@@ -95,6 +123,40 @@ def select_project_directory(
     if not starting_directory.is_dir():
         starting_directory = Path.home().resolve()
 
+    if WINDOWS:
+        chooser = shutil.which("powershell") or shutil.which("pwsh")
+        if chooser is None:
+            raise RuntimeError(
+                "No native folder chooser is available; PowerShell is required, "
+                "or enter the project folder path manually."
+            )
+        environment = os.environ.copy()
+        environment["PILFEREDPARROT_CHOOSER_INITIAL"] = str(starting_directory)
+        script = (
+            "$ErrorActionPreference='Stop'; "
+            "Add-Type -AssemblyName System.Windows.Forms; "
+            "$dialog=New-Object System.Windows.Forms.FolderBrowserDialog; "
+            "$dialog.Description='Choose project folder'; "
+            "$dialog.SelectedPath=$env:PILFEREDPARROT_CHOOSER_INITIAL; "
+            "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); "
+            "if($dialog.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+            "{[Console]::Write($dialog.SelectedPath)}"
+        )
+        try:
+            process = subprocess.Popen(
+                [chooser, "-NoProfile", "-NonInteractive", "-STA", "-Command", script],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                encoding="utf-8", errors="replace", env=environment,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+        except OSError as error:
+            raise RuntimeError("The native folder chooser could not be opened.") from error
+        stdout, _stderr = process.communicate()
+        if process.returncode != 0:
+            raise RuntimeError("The native folder chooser could not be opened.")
+        selected = stdout.rstrip("\r\n")
+        return normalize(selected) if selected else None
+
     parent_window = _active_x11_window()
     if chooser := shutil.which("zenity"):
         starting_value = str(starting_directory)
@@ -137,6 +199,13 @@ def select_project_directory(
 
 def persistent_browser_profile() -> Path:
     """Match the persistent profile path in bin/pilferedparrot-app-browser."""
+    if WINDOWS:
+        local_app_data = os.environ.get("LOCALAPPDATA")
+        state_root = (
+            Path(local_app_data).expanduser() if local_app_data
+            else Path.home() / "AppData/Local"
+        )
+        return state_root / "PilferedParrot/chrome-profile"
     configured = os.environ.get("XDG_STATE_HOME")
     state_root = Path(configured).expanduser() if configured else Path.home() / ".local/state"
     return state_root / "pilferedparrot/chrome-profile"
@@ -260,6 +329,67 @@ def open_browser(url: str) -> bool:
     return webbrowser.open(url)
 
 
+def _is_edge_browser(browser: str) -> bool:
+    return Path(browser).stem.lower() in {"msedge", "microsoftedge"}
+
+
+def _app_browser_profile(browser: str) -> Path:
+    profile = persistent_browser_profile()
+    if _is_edge_browser(browser):
+        return profile.parent / "edge-profile"
+    return profile
+
+
+def open_app_browser(url: str, *, browser: str | None = None) -> bool:
+    """Open *url* as a dedicated app window using the persistent Windows profile."""
+    browser = browser or chromium_browser()
+    if browser is None:
+        return False
+    profile = _app_browser_profile(browser)
+    profile.mkdir(mode=0o700, parents=True, exist_ok=True)
+    started = time.monotonic()
+    process = subprocess.Popen(
+        [
+            browser, f"--user-data-dir={profile}", "--no-first-run",
+            "--no-default-browser-check", "--disable-background-mode",
+            "--disable-session-crashed-bubble", "--start-maximized",
+            "--class=pilferedparrot", f"--app={url}",
+        ],
+        stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL, start_new_session=True, close_fds=True,
+    )
+    threading.Thread(
+        target=_watch_app_browser, args=(process, url, started),
+        name="pilferedparrot-app-browser", daemon=True,
+    ).start()
+    return True
+
+
+def _watch_app_browser(
+    process: subprocess.Popen[Any], url: str, started: float,
+) -> None:
+    """Notify the loopback server when the standalone app window really closed."""
+    try:
+        process.wait()
+    except (OSError, ValueError):
+        return
+    # A process that exits during startup did not represent a usable window.
+    if time.monotonic() - started >= 2:
+        notify_window_closed(url)
+
+
+class WindowsAppBrowser(webbrowser.BaseBrowser):
+    """webbrowser controller suitable for registering the native Windows app window."""
+
+    def __init__(self, browser: str | None = None):
+        super().__init__(name="pilferedparrot-windows-app")
+        self.browser = browser
+
+    def open(self, url: str, new: int = 0, autoraise: bool = True) -> bool:
+        del new, autoraise
+        return open_app_browser(url, browser=self.browser)
+
+
 def notify_window_closed(
     browser_url: str, *, opener: Callable[..., Any] | None = None,
     is_loopback: Callable[[str], bool] | None = None,
@@ -379,7 +509,8 @@ class NativeIntegration:
         if browser is _DISCOVER_BROWSER:
             browser = chromium_browser()
         if browser is None:
-            raise RuntimeError("Chrome or Chromium is required for another provider window")
+            browser_names = "Chrome, Chromium, or Edge" if WINDOWS else "Chrome or Chromium"
+            raise RuntimeError(f"{browser_names} is required for another provider window")
         history_id = f"provider-{provider}"
         launch_id = uuid.uuid4().hex
         capability = issue_capability(
@@ -457,7 +588,8 @@ class NativeIntegration:
             if browser is _DISCOVER_BROWSER:
                 browser = chromium_browser()
             if browser is None:
-                raise RuntimeError("Chrome or Chromium is required for the Chat window")
+                browser_names = "Chrome, Chromium, or Edge" if WINDOWS else "Chrome or Chromium"
+                raise RuntimeError(f"{browser_names} is required for the Chat window")
             profile = Path(tempfile.mkdtemp(prefix="pilferedparrot-chat-"))
             capability = issue_capability("chat", provider=provider, model=model)
             separator = "&" if "#" in url else "#"
@@ -499,6 +631,11 @@ class NativeIntegration:
             browser = chromium_browser()
         if browser is None:
             raise RuntimeError("Chrome or Chromium is required to choose a browser theme")
+        if _is_edge_browser(str(browser)):
+            raise RuntimeError(
+                "Chrome or Chromium is required to choose a browser theme; "
+                "Microsoft Edge cannot install Chrome themes here"
+            )
         profile = persistent_browser_profile()
         profile.mkdir(mode=0o700, parents=True, exist_ok=True)
         subprocess.Popen(

@@ -36,7 +36,7 @@ class ProviderUpdateTests(unittest.TestCase):
         self.assertEqual(result["latest_version"], "1.3.0")
         self.assertEqual(result["update_command"], "npm install -g @openai/codex")
         run.assert_called_once_with(["/bin/codex", "--version"], capture_output=True,
-                                    text=True, timeout=5, check=False)
+                                    text=True, encoding="utf-8", errors="replace", timeout=5, check=False)
 
     @patch("pilferedparrot.provider_updates.urllib.request.urlopen")
     @patch("pilferedparrot.provider_updates.subprocess.run")
