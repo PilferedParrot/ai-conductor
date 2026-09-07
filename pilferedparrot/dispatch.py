@@ -33,6 +33,12 @@ class RunResult:
     live_input_tokens: int | None = None
     live_output_tokens: int | None = None
     live_context_window_tokens: int | None = None
+    reported_model: str | None = None
+    reported_reasoning_effort: str | None = None
+    usage_basis: str = "unknown"
+    cached_input_tokens: int | None = None
+    usage_includes_children: bool | None = None
+    reported_usage: dict[str, int | None] | None = None
 
 
 class RunCancelled(RuntimeError):
@@ -141,10 +147,9 @@ def _stream_process(
     cwd: Path,
     *,
     cancel_event: threading.Event | None,
-    timeout_seconds: float,
     stdout_line: Callable[[str], None],
 ) -> subprocess.CompletedProcess[str]:
-    """Drain a provider line-by-line while retaining cancellation and stderr."""
+    """Stream a provider until it exits or is cancelled, with no job deadline."""
     _check_cancelled(cancel_event)
     proc = subprocess.Popen(
         provider_argv(command),
@@ -175,7 +180,6 @@ def _stream_process(
     stdout: list[str] = []
     stderr: list[str] = []
     finished: set[str] = set()
-    deadline = time.monotonic() + timeout_seconds
     input_errors: Queue[BaseException] = Queue(maxsize=1)
 
     def write_prompt() -> None:
@@ -198,11 +202,8 @@ def _stream_process(
             _check_cancelled(cancel_event)
             if not input_errors.empty():
                 raise input_errors.get_nowait()
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"provider request timed out after {timeout_seconds:g}s")
             try:
-                channel, line = lines.get(timeout=min(0.1, remaining))
+                channel, line = lines.get(timeout=0.1)
             except Empty:
                 continue
             if line is None:
@@ -269,6 +270,52 @@ def _token_count(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return count if count >= 0 else None
+
+
+def _harness_bounded(config: dict[str, Any]) -> bool:
+    harness = config.get("_harness")
+    return isinstance(harness, dict) and harness.get("bounded") is True
+
+
+def _structured_string(event: dict[str, Any], *names: str) -> str | None:
+    """Read a scalar string from an explicitly structured provider payload."""
+    for source in (event, event.get("payload")):
+        if not isinstance(source, dict):
+            continue
+        for name in names:
+            value = source.get(name)
+            if isinstance(value, str) and value.strip():
+                return value.strip()
+    return None
+
+
+def _codex_runtime_metadata(event: dict[str, Any]) -> tuple[str | None, str | None]:
+    event_type = str(event.get("type") or "")
+    # These are provider protocol records. Assistant text is deliberately not
+    # inspected, since requested settings are not runtime confirmation.
+    if event_type not in {"turn_context", "session.init", "session_initialized", "init"}:
+        return None, None
+    return (
+        _structured_string(event, "model", "model_id"),
+        _structured_string(event, "effort", "reasoning_effort"),
+    )
+
+
+def _claude_runtime_metadata(event: dict[str, Any]) -> tuple[str | None, str | None]:
+    if event.get("type") == "system" and event.get("subtype") == "init":
+        return (
+            _structured_string(event, "model"),
+            _structured_string(event, "effort", "reasoning_effort"),
+        )
+    if event.get("type") == "assistant":
+        message = event.get("message")
+        if isinstance(message, dict):
+            value = message.get("model")
+            model = value.strip() if isinstance(value, str) and value.strip() else None
+            effort = message.get("effort", message.get("reasoning_effort"))
+            effort = effort.strip() if isinstance(effort, str) and effort.strip() else None
+            return model, effort
+    return None, None
 
 
 def _live_usage_from_event(
@@ -397,6 +444,11 @@ def _codex_command(conversation: Conversation, config: dict[str, Any], cwd: Path
         if context_limit <= 0:
             raise ValueError("Codex context window limit must be a positive integer")
         command += ["--config", f"model_context_window={context_limit}"]
+    if _harness_bounded(config):
+        # Current Codex configuration documents this switch as disabling
+        # native multi-agent tools. A thread limit excludes the primary and
+        # would still allow a child. Older CLIs must support agents.enabled.
+        command += ["--config", "agents.enabled=false"]
     for path in codex_additional_write_dirs(config):
         if path != cwd:
             command += ["--add-dir", str(path)]
@@ -426,9 +478,16 @@ def capture_codex(
     input_tokens: int | None = None
     output_tokens: int | None = None
     live_usage: tuple[int, int, int | None] | None = None
+    cached_input_tokens: int | None = None
+    usage_basis = "unknown"
+    usage_includes_children: bool | None = None
+    reported_model: str | None = None
+    reported_reasoning_effort: str | None = None
 
     def receive(line: str) -> None:
         nonlocal final_message, input_tokens, output_tokens, live_usage
+        nonlocal cached_input_tokens, usage_basis, usage_includes_children
+        nonlocal reported_model, reported_reasoning_effort
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -445,6 +504,16 @@ def capture_codex(
             usage = event["usage"]
             input_tokens = _token_count(usage.get("input_tokens"))
             output_tokens = _token_count(usage.get("output_tokens"))
+            cached_input_tokens = _token_count(usage.get("cached_input_tokens"))
+            usage_basis = "delta"
+            includes_children = usage.get("usage_includes_children", usage.get("includes_children"))
+            if isinstance(includes_children, bool):
+                usage_includes_children = includes_children
+        runtime_model, runtime_effort = _codex_runtime_metadata(event)
+        if runtime_model is not None:
+            reported_model = runtime_model
+        if runtime_effort is not None:
+            reported_reasoning_effort = runtime_effort
         parsed_live_usage = _live_usage_from_event(event)
         if parsed_live_usage is not None:
             live_usage = parsed_live_usage
@@ -454,7 +523,6 @@ def capture_codex(
     completed = _stream_process(
         command, prompt, cwd,
         cancel_event=cancel_event,
-        timeout_seconds=float(config["codex"].get("request_timeout_seconds", 1800)),
         stdout_line=receive,
     )
     error = completed.stderr.strip()
@@ -468,6 +536,11 @@ def capture_codex(
         live_input_tokens=live_usage[0] if live_usage is not None else None,
         live_output_tokens=live_usage[1] if live_usage is not None else None,
         live_context_window_tokens=live_usage[2] if live_usage is not None else None,
+        reported_model=reported_model,
+        reported_reasoning_effort=reported_reasoning_effort,
+        usage_basis=usage_basis,
+        cached_input_tokens=cached_input_tokens,
+        usage_includes_children=usage_includes_children,
     )
 
 
@@ -480,6 +553,12 @@ def _claude_command(conversation: Conversation, config: dict[str, Any]) -> list[
     ]
     if conversation.provider_session_id:
         command += ["--resume", conversation.provider_session_id]
+    reasoning_effort = claude.get("reasoning_effort")
+    if reasoning_effort is not None:
+        reasoning_effort = str(reasoning_effort).strip().lower()
+        if reasoning_effort not in {"low", "medium", "high", "xhigh", "max"}:
+            raise ValueError(f"unsupported Claude reasoning effort: {reasoning_effort}")
+        command += ["--effort", reasoning_effort]
     model = claude.get("model")
     if model:
         command += ["--model", str(model)]
@@ -488,6 +567,9 @@ def _claude_command(conversation: Conversation, config: dict[str, Any]) -> list[
         if permission_mode not in {"default", "acceptEdits", "bypassPermissions", "plan"}:
             raise ValueError(f"unsupported Claude permission mode: {permission_mode}")
         command += ["--permission-mode", str(permission_mode)]
+    if _harness_bounded(config):
+        # Prevent nested Claude delegation from escaping the recorded harness.
+        command += ["--disallowedTools", "Agent", "Task"]
     return command
 
 
@@ -518,9 +600,14 @@ def capture_claude(
     streamed: list[str] = []
     input_tokens: int | None = None
     output_tokens: int | None = None
+    cached_input_tokens: int | None = None
+    reported_model: str | None = None
+    reported_reasoning_effort: str | None = None
+    reported_usage: dict[str, int | None] | None = None
 
     def receive(line: str) -> None:
-        nonlocal final_message, input_tokens, output_tokens
+        nonlocal final_message, input_tokens, output_tokens, cached_input_tokens
+        nonlocal reported_model, reported_reasoning_effort, reported_usage
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
@@ -532,9 +619,18 @@ def capture_claude(
         if event.get("session_id"):
             conversation.provider_session_id = str(event["session_id"])
         usage = event.get("usage")
-        if isinstance(usage, dict):
+        if event.get("type") == "result" and isinstance(usage, dict):
+            reported_usage = {key: _token_count(usage.get(key)) for key in (
+                "input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens",
+            )}
             input_tokens = _token_count(usage.get("input_tokens"))
             output_tokens = _token_count(usage.get("output_tokens"))
+            cached_input_tokens = _token_count(usage.get("cached_input_tokens"))
+        runtime_model, runtime_effort = _claude_runtime_metadata(event)
+        if runtime_model is not None:
+            reported_model = runtime_model
+        if runtime_effort is not None:
+            reported_reasoning_effort = runtime_effort
         text = _claude_text(event)
         if event.get("type") == "result" and text is not None:
             final_message = text
@@ -545,7 +641,6 @@ def capture_claude(
 
     completed = _stream_process(
         command, prompt, cwd, cancel_event=cancel_event,
-        timeout_seconds=float(config["claude"].get("request_timeout_seconds", 1800)),
         stdout_line=receive,
     )
     error = completed.stderr.strip()
@@ -554,6 +649,12 @@ def capture_claude(
         text, completed.returncode, conversation.provider_session_id, error or None,
         unavailable=completed.returncode != 0 and not text and _looks_unavailable(error),
         input_tokens=input_tokens, output_tokens=output_tokens,
+        reported_model=reported_model,
+        reported_reasoning_effort=reported_reasoning_effort,
+        # The installed CLI does not establish the final result counter's
+        # scope across resumes. Preserve it as an observation, not a task bill.
+        usage_basis="unknown", cached_input_tokens=cached_input_tokens,
+        reported_usage=reported_usage,
     )
 
 

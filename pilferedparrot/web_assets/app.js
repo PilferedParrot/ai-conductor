@@ -7,7 +7,7 @@ const state = {
   windowId: "main", windowProvider: "codex", providerModels: {}, authPending: {},
   authConfirmation: {}, authCodes: {}, providers: [], provider_templates: [],
   providerDraft: null, preferences: {}, modelPolls: {}, modelFeedback: {},
-  initialized: false,
+  harness: { default_preset: "manual", presets: [] }, initialized: false,
 };
 const CAPABILITY_SESSION_KEY = "pilferedparrot-dashboard-capability";
 const WINDOW_ID_SESSION_KEY = "pilferedparrot-dashboard-window-id";
@@ -49,6 +49,7 @@ let toastTimer = null;
 let notificationPermissionPending = false;
 let stateRequestSequence = 0;
 let stateAppliedSequence = 0;
+const harnessPendingActions = new Set();
 const documentId = globalThis.crypto?.randomUUID?.()
   || `document-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 const BUDGET_POLL_MS = 60_000;
@@ -78,6 +79,9 @@ function visibleChats() {
 function pendingMessage(chat = activeChat()) { return chat?.messages?.find((message) => message.pending); }
 function activeRunning() { return Boolean(pendingMessage()); }
 function anyRunning() { return state.chats.some((chat) => pendingMessage(chat)); }
+function harnessRunning(chat = activeChat()) {
+  return Boolean(chat?.harness_tasks?.some((task) => task.status === "running"));
+}
 
 function notificationPermissionDecision() {
   return state.preferences?.notification_permission || "unasked";
@@ -835,6 +839,28 @@ function restorePaneWidths() {
 function renderHeader() {
   const chat = activeChat();
   $("#chatTitle").textContent = chat?.title || "New work session";
+  const parent = chat?.harness_parent;
+  $("#harnessReturn").hidden = !parent;
+  const workerFinished = Boolean(parent && !pendingMessage(chat));
+  $("#harnessReturn").textContent = workerFinished ? "↩ Return to parent review" : "↩ Return to parent";
+  $("#harnessReturn").setAttribute("aria-label", workerFinished ? "Return to parent review" : "Return to parent");
+  $("#harnessReturn").onclick = parent ? async () => {
+    state.activeId = parent.chat_id;
+    try { sessionStorage.setItem(ACTIVE_CHAT_SESSION_KEY, parent.chat_id); } catch (_error) {}
+    try {
+      await refreshState();
+      if (!activeChat() || activeChat().id !== parent.chat_id) {
+        toast("The parent session is no longer available.");
+      } else if (workerFinished) {
+        renderHarnessPresets();
+        renderHarnessTasks();
+        $("#harnessDialog").showModal();
+      }
+    } catch (error) {
+      toast(error.message);
+      await refreshState().catch(() => {});
+    }
+  } : null;
   $("#projectButton").textContent = state.draftCwd || chat?.cwd || state.defaultCwd;
   const context = $("#technicalContext");
   if (chat?.context_usage) {
@@ -875,6 +901,199 @@ function renderHeader() {
     !state.initialized || activeRunning() || selectionSavePending);
 }
 
+function harnessTasks() {
+  return activeChat()?.harness_tasks || [];
+}
+
+function harnessConfig() {
+  return state.harness || {};
+}
+
+function harnessPresets() {
+  const presets = harnessConfig().presets || [];
+  return presets.length ? presets : [{ id: "manual", label: "Manual", provider: state.windowProvider }];
+}
+
+function renderHarnessPresets() {
+  const select = $("#harnessPreset");
+  if (!select) return;
+  const selected = select.value || harnessConfig().default_preset || "manual";
+  select.innerHTML = harnessPresets().map((preset) =>
+    `<option value="${escapeHtml(preset.id)}">${escapeHtml(preset.label || preset.id)}${preset.provider ? ` · ${escapeHtml(preset.provider)}` : ""}</option>`
+  ).join("");
+  select.value = harnessPresets().some((preset) => preset.id === selected) ? selected : harnessPresets()[0].id;
+}
+
+function harnessText(id) { return $(id).value.trim(); }
+function harnessLines(id) { return harnessText(id).split(/\r?\n/).map((value) => value.trim()).filter(Boolean); }
+function harnessNumber(id) {
+  const value = $(id).value.trim();
+  return value === "" ? null : Number(value);
+}
+function harnessContractFromForm() {
+  return {
+    task: harnessText("#harnessTask"), category: $("#harnessCategory").value,
+    inputs: harnessLines("#harnessInputs"), write_scope: harnessLines("#harnessWriteScope"),
+    acceptance_check: harnessText("#harnessAcceptance"), artifact: harnessText("#harnessArtifact"),
+    stop_conditions: harnessText("#harnessStop"),
+  };
+}
+function harnessEstimates() {
+  return { unit: "effort_points", direct: harnessNumber("#harnessEstimateDirect"), briefing: harnessNumber("#harnessEstimateBriefing"), execution: harnessNumber("#harnessEstimateExecution"), verification: harnessNumber("#harnessEstimateVerification"), rework: harnessNumber("#harnessEstimateRework") };
+}
+function harnessActionButton(label, action, id) {
+  const pending = harnessPendingActions.has(`${action}:${id}`);
+  return `<button type="button" data-harness-action="${action}" data-task-id="${escapeHtml(id)}" ${pending ? "disabled" : ""}>${label}</button>`;
+}
+const HARNESS_STATUS_LABELS = {
+  planned: "Ready to launch",
+  running: "In progress",
+  awaiting_review: "Ready for review",
+  accepted: "Accepted",
+  rejected: "Needs retry",
+  failed: "Needs review",
+};
+function harnessStatusLabel(status) { return HARNESS_STATUS_LABELS[status] || "Status unavailable"; }
+function harnessNextStep(status, attemptCount = 0) {
+  return {
+    planned: "Next: launch this package when you are ready.",
+    running: "Next: wait for this run to finish.",
+    awaiting_review: "Next: inspect the artifact and record Accept or Reject.",
+    failed: "Next: record a rejection to plan a retry. Accept is unavailable for failed runs.",
+    rejected: attemptCount >= 3
+      ? "Attempt limit reached: define a new approach or package."
+      : "Next: explain the defect and plan a retry.",
+    accepted: "Complete: artifact accepted. Review evidence is recorded below.",
+  }[status] || "Next: inspect the package status.";
+}
+function harnessRouteLabel(mode) {
+  return { delegate: "Delegated worker", direct: "Direct work" }[mode] || mode || "Route pending";
+}
+function harnessFieldKey(field) {
+  const attribute = [...field.attributes].find((item) => item.name.startsWith("data-") && item.name !== "data-task-id");
+  return attribute ? `${attribute.name}=${attribute.value}` : "";
+}
+function harnessMetric(label, metric) {
+  if (!metric) return `<li>${escapeHtml(label)}: unknown</li>`;
+  const value = metric.value === null || metric.value === undefined ? "unknown" : String(metric.value);
+  const unit = metric.unit ? ` ${metric.unit}` : "";
+  return `<li>${escapeHtml(label)}: ${escapeHtml(value + unit)} (${escapeHtml(metric.source || "unknown")})</li>`;
+}
+function harnessReportedUsageMarkup(reported) {
+  if (!reported || typeof reported !== "object") return "";
+  const labels = {
+    input_tokens: "Reported input tokens", output_tokens: "Reported output tokens",
+    cache_read_input_tokens: "Reported cache-read tokens",
+    cache_creation_input_tokens: "Reported cache-creation tokens",
+  };
+  const metrics = Object.entries(labels).filter(([key]) => reported[key] !== null && reported[key] !== undefined)
+    .map(([key, label]) => `<li>${escapeHtml(label)}: ${escapeHtml(String(reported[key]))} (provider-reported; scope unknown)</li>`).join("");
+  return metrics ? `<ul class="harness-metrics">${metrics}</ul>` : "";
+}
+function harnessDisclosure(key, open, openDetails) {
+  return openDetails.has(key) ? (openDetails.get(key) ? " open" : "") : (open ? " open" : "");
+}
+function harnessContractMarkup(contract, label, key, openDetails, open = false) {
+  if (!contract) return "";
+  const list = (values, emptyLabel = "none") => Array.isArray(values) && values.length
+    ? `<ul>${values.map((value) => `<li>${escapeHtml(String(value))}</li>`).join("")}</ul>`
+    : `<span class="harness-unknown">${escapeHtml(emptyLabel)}</span>`;
+  return `<details class="harness-contract" data-harness-disclosure="${escapeHtml(key)}"${harnessDisclosure(key, open, openDetails)}><summary>${escapeHtml(label)}</summary><dl><dt>Task</dt><dd>${escapeHtml(contract.task || "unknown")}</dd><dt>Category</dt><dd>${escapeHtml(contract.category || "unknown")}</dd><dt>Inputs</dt><dd>${list(contract.inputs)}</dd><dt>Write scope</dt><dd>${list(contract.write_scope, "read-only")}</dd><dt>Acceptance (independently specified)</dt><dd>${escapeHtml(contract.acceptance_check || "unknown")}</dd><dt>Expected artifact</dt><dd>${escapeHtml(contract.artifact || "unknown")}</dd><dt>Stop conditions</dt><dd>${escapeHtml(contract.stop_conditions || "unknown")}</dd>${contract.hypothesis ? `<dt>Hypothesis</dt><dd>${escapeHtml(contract.hypothesis)}</dd>` : ""}</dl></details>`;
+}
+function harnessEstimateMarkup(estimates, key, openDetails) {
+  if (!estimates) return "";
+  const unit = estimates.unit || "unknown unit";
+  const source = estimates.source || "unknown provenance";
+  const values = ["direct", "briefing", "execution", "verification", "rework"]
+    .map((name) => `<li>${escapeHtml(name)}: ${estimates[name] === null || estimates[name] === undefined ? "unknown" : escapeHtml(String(estimates[name]))}</li>`).join("");
+  return `<details class="harness-contract harness-estimates-summary" data-harness-disclosure="${escapeHtml(key)}"${harnessDisclosure(key, true, openDetails)}><summary>Prospective estimates (${escapeHtml(unit)} · ${escapeHtml(source)})</summary><ul class="harness-metrics">${values}</ul></details>`;
+}
+function harnessSummaryMarkup(summary) {
+  if (!summary) return "";
+  const counts = summary.counts || {};
+  const countText = ["total", "accepted", "rejected", "awaiting_review", "failed", "running"]
+    .filter((name) => counts[name] !== undefined).map((name) => `${name === "total" ? "Total" : harnessStatusLabel(name)}: ${counts[name]}`).join(" · ");
+  return `<p class="harness-summary">Outcome: ${escapeHtml(countText || "unknown")}; elapsed ${escapeHtml(harnessMetricText(summary.elapsed))}; review ${escapeHtml(harnessMetricText(summary.review))}; rework ${escapeHtml(harnessMetricText(summary.rework))}; usage ${escapeHtml(harnessUsageText(summary.usage))}</p>`;
+}
+function harnessMetricText(metric) {
+  if (!metric || metric.value === null || metric.value === undefined) return "unknown";
+  return `${metric.value}${metric.unit ? ` ${metric.unit}` : ""} (${metric.source || "unknown"})`;
+}
+function harnessUsageText(usage) {
+  if (!usage || !usage.input_tokens || !usage.output_tokens || usage.input_tokens.value === null || usage.output_tokens.value === null) return "unknown";
+  return `${usage.input_tokens.value} in / ${usage.output_tokens.value} out (${usage.input_tokens.source || "unknown"})`;
+}
+function harnessAttemptMarkup(attempt, index, openDetails) {
+  if (!attempt) return "";
+  const requested = attempt.requested || {};
+  const confirmed = attempt.confirmed || {};
+  const usage = attempt.usage || {};
+  const review = attempt.review;
+  const requestedText = requested.model
+    ? `${requested.provider || "unknown"} / ${requested.model} / ${requested.reasoning_effort || "unknown"}`
+    : "direct route (provider-selected runtime)";
+  const runtimeText = confirmed.model || confirmed.reasoning_effort
+    ? `${confirmed.model || "unknown model"} / ${confirmed.reasoning_effort || "unknown effort"} (${confirmed.source || "unknown"})`
+    : `unknown (${confirmed.source || "unknown"})`;
+  const evidence = review ? `<p>Review: ${review.accepted ? "accepted" : "rejected"} · Artifact: ${escapeHtml(review.artifact)} · Evidence: ${escapeHtml(review.evidence)}</p><p>Acceptance checked: ${escapeHtml(review.acceptance_check || attempt.contract?.acceptance_check || "unknown")}</p>` : "";
+  const contract = harnessContractMarkup(attempt.contract, "Contract used for this attempt", `attempt-${attempt.id}-contract`, openDetails);
+  return `<details class="harness-attempt" data-harness-disclosure="attempt-${escapeHtml(attempt.id)}"${harnessDisclosure(`attempt-${attempt.id}`, false, openDetails)}><summary>Attempt ${index + 1}: ${escapeHtml(harnessStatusLabel(attempt.status))}</summary><p>Requested: ${escapeHtml(requestedText)}</p><p>Runtime report: ${escapeHtml(runtimeText)}</p><ul class="harness-metrics">${harnessMetric("Elapsed", attempt.elapsed_seconds)}${harnessMetric("Review", review?.review_seconds)}${harnessMetric("Rework", review?.rework_seconds)}${harnessMetric("Input tokens", usage.input_tokens)}${harnessMetric("Output tokens", usage.output_tokens)}${harnessMetric("Cached input tokens", usage.cached_input_tokens)}${harnessMetric("API-equivalent cost", attempt.api_equivalent_cost)}${harnessMetric("Subscription consumption", attempt.subscription_consumption)}</ul>${harnessReportedUsageMarkup(attempt.reported_usage)}${contract}${evidence}</details>`;
+}
+function renderHarnessTasks() {
+  const target = $("#harnessTasks");
+  if (!target) return;
+  const reviewDrafts = new Map();
+  const focused = document.activeElement?.closest?.("#harnessTasks [data-review-evidence], #harnessTasks [data-retry-evidence], #harnessTasks [data-retry-task], #harnessTasks [data-review-artifact], #harnessTasks [data-review-seconds], #harnessTasks [data-rework-seconds], #harnessTasks [data-review-effort-source]");
+  const focusKey = focused ? harnessFieldKey(focused) : "";
+  const selection = focused && typeof focused.selectionStart === "number"
+    ? [focused.selectionStart, focused.selectionEnd] : null;
+  const openDetails = new Map([...target.querySelectorAll("details[data-harness-disclosure]")].map((item) => [item.dataset.harnessDisclosure, item.open]));
+  const firstRender = !target.querySelector("details[data-harness-disclosure]");
+  target.querySelectorAll("[data-review-evidence], [data-retry-evidence], [data-retry-task], [data-review-artifact], [data-review-seconds], [data-rework-seconds], [data-review-effort-source]").forEach((field) => {
+    reviewDrafts.set(harnessFieldKey(field), field.value);
+  });
+  const tasks = harnessTasks();
+  target.innerHTML = tasks.length ? tasks.map((task) => {
+    const route = task.route || {}; const last = (task.attempts || []).at(-1); const status = task.status || "planned";
+    const reviewActions = status === "failed" ? harnessActionButton("Reject", "reject", task.id) : `${harnessActionButton("Accept", "accept", task.id)}${harnessActionButton("Reject", "reject", task.id)}`;
+    const review = ["awaiting_review", "failed"].includes(status) ? `<div class="harness-review"><label>Artifact<input data-review-artifact="${escapeHtml(task.id)}" required value="${escapeHtml(task.contract?.artifact || "")}"></label><label>Evidence<textarea data-review-evidence="${escapeHtml(task.id)}" required rows="2"></textarea></label><div class="harness-grid"><label>Review seconds<input type="number" min="0" data-review-seconds="${escapeHtml(task.id)}"></label><label>Rework seconds<input type="number" min="0" data-rework-seconds="${escapeHtml(task.id)}"></label><label>Effort source<select data-review-effort-source="${escapeHtml(task.id)}"><option value="estimated" selected>estimated</option><option value="measured">measured</option></select></label></div><div class="harness-task-actions">${reviewActions}</div></div>` : "";
+    const retry = status === "rejected" && (task.attempts || []).length < 3 ? `<div class="harness-review"><label>Why was the previous attempt inadequate?<textarea data-retry-evidence="${escapeHtml(task.id)}" required rows="2"></textarea></label><label>Revised task (optional)<textarea data-retry-task="${escapeHtml(task.id)}" rows="2" placeholder="Change the brief, or leave blank to use the next escalation setting"></textarea></label><div class="harness-task-actions">${harnessActionButton("Plan retry", "retry", task.id)}</div></div>` : "";
+    const run = status === "planned" ? harnessActionButton("Launch", "run", task.id) : "";
+    const requested = route.requested || {};
+    const routeText = `${requested.provider || "unknown"} / ${requested.model || "provider default"} / ${requested.reasoning_effort || "unknown effort"}`;
+    return `<article class="harness-task" data-harness-status="${escapeHtml(status)}"><header><span>${escapeHtml(task.contract?.task || task.id)}</span><span class="harness-status">${escapeHtml(harnessStatusLabel(status))}</span></header><p class="harness-next-step">${escapeHtml(harnessNextStep(status, (task.attempts || []).length))}</p><p>Route: ${escapeHtml(harnessRouteLabel(route.mode))}${requested.model ? ` · ${escapeHtml(routeText)}` : ""}</p><p>${escapeHtml(route.reason || "")}</p>${route.prior_selection ? `<p>Previous selection: ${escapeHtml(route.prior_selection.model || "provider default")} / ${escapeHtml(route.prior_selection.reasoning_effort || "provider default")}. This package uses the requested route above.</p>` : ""}${harnessContractMarkup(task.contract, "Current contract", `task-${task.id}-contract`, openDetails, firstRender)}${harnessEstimateMarkup(route.estimates, `task-${task.id}-estimates`, openDetails)}${harnessSummaryMarkup(task.summary)}${(task.attempts || []).map((attempt, index) => harnessAttemptMarkup(attempt, index, openDetails)).join("")}<div class="harness-task-actions">${run}</div>${review}${retry}</article>`;
+  }).join("") : '<p class="field-note">No harness packages planned in this session.</p>';
+  target.querySelectorAll("[data-review-evidence], [data-retry-evidence], [data-retry-task], [data-review-artifact], [data-review-seconds], [data-rework-seconds], [data-review-effort-source]").forEach((field) => {
+    const key = harnessFieldKey(field);
+    if (reviewDrafts.has(key)) field.value = reviewDrafts.get(key);
+  });
+  if (focusKey) {
+    const field = [...target.querySelectorAll("input, textarea, select")].find((item) => harnessFieldKey(item) === focusKey);
+    if (field) { field.focus(); if (selection && typeof field.setSelectionRange === "function") field.setSelectionRange(...selection); }
+  }
+}
+async function harnessPlan() {
+  const contract = harnessContractFromForm();
+  if (!contract.task || !contract.acceptance_check || !contract.artifact || !contract.stop_conditions) { toast("Complete every required contract field before planning."); return; }
+  const button = $("#harnessPlan"); button.disabled = true;
+  try {
+    const result = await api(`/api/chats/${encodeURIComponent(activeChat().id)}/harness`, { method: "POST", body: JSON.stringify({ action: "plan", preset: $("#harnessPreset").value, contract, estimates: harnessEstimates() }) });
+    state.chats = state.chats.map((chat) => chat.id === result.id ? result : chat); state.activeId = result.id; $("#harnessEditor").open = false; render(); toast("Harness package planned.");
+  } catch (error) { toast(error.message); } finally { button.disabled = false; }
+}
+async function harnessTaskAction(action, taskId, payload = {}) {
+  const parent = activeChat(); if (!parent) return;
+  const actionKey = `${action}:${taskId}`;
+  if (harnessPendingActions.has(actionKey)) return;
+  harnessPendingActions.add(actionKey); renderHarnessTasks();
+  try {
+    const result = await api(`/api/chats/${encodeURIComponent(parent.id)}/harness`, { method: "POST", body: JSON.stringify({ action, task_id: taskId, ...payload }) });
+    if (action === "run") { state.chats = state.chats.filter((chat) => chat.id !== result.id).concat(result); state.activeId = result.id; $("#harnessDialog").close(); await refreshState(); schedulePoll(); return; }
+    state.chats = state.chats.map((chat) => chat.id === result.id ? result : chat); state.activeId = result.id; renderHarnessTasks();
+  } catch (error) { toast(error.message); }
+  finally { harnessPendingActions.delete(actionKey); renderHarnessTasks(); }
+}
+
 function render() {
   if (state.initialized) {
     const selected = activeChat();
@@ -888,8 +1107,15 @@ function render() {
   renderMessages();
   renderHeader();
   const running = activeRunning();
+  const harnessChild = Boolean(activeChat()?.harness_parent);
+  const harnessParentRunning = harnessRunning();
   const ready = state.initialized;
-  $("#prompt").disabled = !ready;
+  $("#prompt").disabled = !ready || harnessChild || harnessParentRunning;
+  $("#prompt").placeholder = harnessChild
+    ? "Return to the parent session to continue this bounded work package"
+    : harnessParentRunning
+      ? "A bounded harness package is running; wait for review before continuing this session"
+      : DEFAULT_PROMPT_PLACEHOLDER;
   $("#newWorkSession").disabled = !ready || createChatPending || selectionSavePending;
   const chatSupported = providerInfo(state.windowProvider).capabilities?.chat !== false;
   $("#openChat").disabled = !ready || !chatSupported;
@@ -900,8 +1126,11 @@ function render() {
   $("#notificationPreferences").disabled = !ready || notificationPermissionPending;
   $("#notificationPreferencesLabel").textContent = notificationPermissionLabel();
   $("#projectButton").disabled = !ready;
+  $("#harnessButton").disabled = !ready || createChatPending;
+  renderHarnessPresets();
+  renderHarnessTasks();
   $("#sendButton").classList.toggle("hidden", running);
-  $("#sendButton").disabled = !ready || running || selectionSavePending || !$("#prompt").value.trim();
+  $("#sendButton").disabled = !ready || running || harnessChild || harnessParentRunning || selectionSavePending || !$("#prompt").value.trim();
   $("#cancelButton").classList.toggle("hidden", !running);
   $("#cancelButton").disabled = Boolean(pendingMessage()?.cancel_requested);
 }
@@ -1069,10 +1298,11 @@ async function createChat(requestedModel = "") {
     const chat = await api("/api/chats", {
       method: "POST",
       body: JSON.stringify({
-        cwd: state.draftCwd || state.defaultCwd, provider, model: requestedModel || null,
+        cwd: state.draftCwd || state.defaultCwd, provider,
+        model: activeChat()?.harness_parent ? null : requestedModel || null,
         // The empty option is an explicit "Default" choice.  Do not revive a
         // stale draft effort when the user has selected it.
-        reasoning_effort: activeChat() || $("#reasoningSelect").options.length
+        reasoning_effort: activeChat()?.harness_parent ? undefined : activeChat() || $("#reasoningSelect").options.length
           ? $("#reasoningSelect").value || null : undefined,
       }),
     });
@@ -1094,7 +1324,7 @@ async function createChat(requestedModel = "") {
 async function sendMessage(event) {
   event.preventDefault();
   const content = $("#prompt").value.trim();
-  if (!state.initialized || !content || activeRunning() || createChatPending || selectionSavePending) return;
+  if (!state.initialized || !content || activeRunning() || harnessRunning() || activeChat()?.harness_parent || createChatPending || selectionSavePending) return;
   if (pendingLaunchModel !== null) {
     openProjectDialog(true);
     return;
@@ -1187,6 +1417,7 @@ function applyServerState(initial) {
   const requestedProvider = activeChat()?.requested_provider;
   const requestedModel = activeChat()?.requested_model;
   Object.assign(state, initial);
+  state.harness = initial.harness || state.harness || { default_preset: "manual", presets: [] };
   state.windowId = initial.window_id || state.windowId;
   state.windowProvider = initial.window_provider || state.windowProvider;
   const chats = visibleChats();
@@ -1241,6 +1472,10 @@ function schedulePoll() {
           `pilferedparrot-work-${chat.id}`,
         ));
         await refreshBudgets(false);
+        // A worker completion updates its parent package, while the worker is
+        // the selected session. Refresh full state so that review is available
+        // when the user returns to the parent.
+        if (completed.some((chat) => chat.harness_parent)) await refreshState();
       }
     }
     catch (error) { toast(error.message); }
@@ -1310,6 +1545,7 @@ async function init() {
     restorePaneWidths();
     const initial = await api("/api/state");
     Object.assign(state, initial);
+    state.harness = initial.harness || state.harness || { default_preset: "manual", presets: [] };
     if (fragmentCwd) state.defaultCwd = fragmentCwd;
     state.windowId = initial.window_id || state.windowId;
     state.windowProvider = initial.window_provider || fragmentProvider
@@ -1500,6 +1736,34 @@ async function openChromeThemeGallery() {
 }
 
 $("#composer").addEventListener("submit", sendMessage);
+$("#harnessButton").addEventListener("click", async () => {
+  if (!activeChat()) {
+    try { await createChat(); }
+    catch (error) { toast(error.message); return; }
+  }
+  renderHarnessPresets(); renderHarnessTasks(); $("#harnessEditor").open = harnessTasks().length === 0; $("#harnessDialog").showModal();
+});
+$("#harnessClose").addEventListener("click", () => $("#harnessDialog").close());
+$("#harnessPlan").addEventListener("click", harnessPlan);
+$("#harnessTasks").addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-harness-action]"); if (!button) return;
+  const action = button.dataset.harnessAction; const taskId = button.dataset.taskId;
+  button.disabled = true;
+  if (action === "accept" || action === "reject") {
+    const artifact = $(`[data-review-artifact="${CSS.escape(taskId)}"]`)?.value.trim();
+    const evidence = $(`[data-review-evidence="${CSS.escape(taskId)}"]`)?.value.trim();
+    if (!artifact || !evidence) { toast("Artifact and evidence are required for review."); button.disabled = false; return; }
+    const number = (selector) => { const value = $(selector)?.value.trim(); return value === "" ? null : Number(value); };
+    await harnessTaskAction("review", taskId, { accepted: action === "accept", artifact, evidence, review_seconds: number(`[data-review-seconds="${CSS.escape(taskId)}"]`), rework_seconds: number(`[data-rework-seconds="${CSS.escape(taskId)}"]`), effort_source: $(`[data-review-effort-source="${CSS.escape(taskId)}"]`)?.value || "estimated" });
+  } else if (action === "retry") {
+    const evidence = $(`[data-retry-evidence="${CSS.escape(taskId)}"]`)?.value.trim();
+    if (!evidence) { toast("Explain why the previous attempt was inadequate."); button.disabled = false; return; }
+    const revisedTask = $(`[data-retry-task="${CSS.escape(taskId)}"]`)?.value.trim();
+    const contract = revisedTask ? { ...harnessTasks().find((task) => task.id === taskId).contract, task: revisedTask } : undefined;
+    await harnessTaskAction("retry", taskId, { evidence, contract });
+  } else await harnessTaskAction(action, taskId);
+  button.disabled = false;
+});
 $("#prompt").addEventListener("input", resizePrompt);
 $("#prompt").addEventListener("click", (event) => {
   if (clickedAfterPromptSuggestion(event)) acceptPromptSuggestion();

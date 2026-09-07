@@ -300,6 +300,9 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 
 .main { min-width: 0; min-height: 0; display: grid; grid-template-rows: 58px minmax(0, 1fr) auto; container: work / inline-size; background: radial-gradient(circle at 55% -20%, rgba(51, 100, 158, .12), transparent 42%), var(--bg); }
 .topbar { display: flex; min-width: 0; align-items: center; gap: 12px; padding: 0 20px; border-bottom: 1px solid var(--border-soft); background: rgba(11, 16, 23, .84); backdrop-filter: blur(12px); }
+.harness-button { margin-left: auto; padding: 6px 10px; border: 1px solid #345a84; border-radius: 8px; background: #17283b; color: #dcecff; cursor: pointer; font-weight: 650; }
+.harness-button:hover { background: #1b3149; border-color: #4678ab; }
+.harness-return { margin-top: 3px; padding: 2px 7px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 16px; }
 .chat-meta { min-width: 0; flex: 1; }
 .technical-heading { display: flex; min-width: 0; align-items: baseline; gap: 7px; }
 .chat-title { overflow: hidden; font-size: 16px; font-weight: 670; text-overflow: ellipsis; white-space: nowrap; }
@@ -647,6 +650,48 @@ dialog::backdrop { background: rgba(0, 0, 0, .62); }
 .dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 17px; }
 .dialog-actions button { padding: 8px 12px; border: 1px solid #3973ad; border-radius: 8px; background: #2464a6; cursor: pointer; font-size: 16px; }
 .dialog-actions button.secondary { border-color: var(--border); background: transparent; color: var(--muted); }
+#harnessDialog { width: min(800px, calc(100% - 28px)); max-height: 90vh; overflow-y: auto; }
+.harness-dialog-card { width: 100%; box-sizing: border-box; }
+.harness-heading > div { min-width: 0; }
+#harnessEditor > summary { margin: 18px 0 10px; cursor: pointer; font-weight: 650; }
+.harness-task, .harness-heading p { overflow-wrap: anywhere; }
+.harness-heading { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.harness-heading h2 { margin-bottom: 4px; }
+.harness-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin: 8px 0 0; color: #b9d8f5 !important; font-size: 16px; font-weight: 650; }
+.harness-flow span:nth-child(even) { color: var(--sidebar-faint); font-weight: 400; }
+.harness-dialog-card h3 { margin: 18px 0 10px; font-size: 16px; }
+.harness-dialog-card label { min-width: 0; display: grid; gap: 5px; margin-top: 10px; color: var(--muted); font-size: 16px; }
+.harness-dialog-card textarea, .harness-dialog-card input, .harness-dialog-card select { box-sizing: border-box; width: 100%; min-width: 0; padding: 8px 9px; border: 1px solid var(--border); border-radius: 8px; background: #0d141d; color: var(--text); font: inherit; resize: vertical; }
+.harness-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.harness-estimates { margin: 12px 0 0; padding: 5px 10px 10px; border: 1px solid var(--border-soft); border-radius: 9px; }
+.harness-estimates .harness-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.field-note { color: var(--sidebar-faint); font-size: 16px; font-weight: 400; }
+.harness-tasks { display: grid; gap: 10px; margin-top: 16px; }
+.harness-task { padding: 11px; border: 1px solid var(--border-soft); border-radius: 9px; background: var(--panel-2); }
+.harness-task header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; font-weight: 650; }
+.harness-task header > span:first-child { min-width: 0; }
+.harness-task header > span:last-child { flex: none; }
+.harness-status { flex: 0 1 auto; align-self: flex-start; padding: 3px 7px; border: 1px solid #4a6680; border-radius: 999px; color: #c8e1f8; background: rgba(38, 79, 116, .34); font-size: 16px; line-height: 1.2; white-space: nowrap; }
+.harness-task[data-harness-status="accepted"] .harness-status { border-color: #438c6c; color: #b8f0d1; background: rgba(31, 108, 74, .27); }
+.harness-task[data-harness-status="rejected"] .harness-status, .harness-task[data-harness-status="failed"] .harness-status { border-color: #9b7044; color: #ffd69a; background: rgba(122, 75, 25, .25); }
+.harness-next-step { margin: 10px 0 8px !important; color: var(--text) !important; font-weight: 650; }
+.harness-task p { margin: 6px 0; color: var(--muted); white-space: pre-wrap; }
+.harness-task-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
+.harness-task-actions button { padding: 6px 9px; border: 1px solid #3973ad; border-radius: 7px; background: #2464a6; color: var(--text); cursor: pointer; }
+.harness-review { margin-top: 9px; padding-top: 9px; border-top: 1px solid var(--border-soft); }
+.harness-attempt { margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border-soft); border-radius: 7px; color: var(--muted); }
+.harness-attempt summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.harness-attempt p { margin: 6px 0; }
+.harness-contract { margin-top: 8px; padding: 7px 9px; border: 1px solid var(--border-soft); border-radius: 7px; color: var(--muted); }
+.harness-contract summary { cursor: pointer; color: var(--text); font-weight: 600; }
+.harness-contract dl { display: grid; grid-template-columns: minmax(115px, .35fr) minmax(0, 1fr); gap: 5px 10px; margin: 8px 0 0; }
+.harness-contract dt { color: var(--muted); font-weight: 650; }
+.harness-contract dd { min-width: 0; margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.harness-contract ul { margin: 0; padding-left: 18px; }
+.harness-unknown { color: var(--muted); }
+.harness-summary { overflow-wrap: anywhere; }
+.harness-metrics { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 3px 12px; margin: 7px 0; padding-left: 18px; }
+@media (max-width: 600px) { .harness-grid, .harness-estimates .harness-grid { grid-template-columns: 1fr 1fr; } .harness-estimates .harness-grid label:last-child { grid-column: span 2; } .harness-contract dl { grid-template-columns: 1fr; gap: 2px; } .harness-contract dd { margin-bottom: 5px; } }
 .toast { display: block; position: fixed; z-index: 10; inset: auto 18px 18px auto; max-width: min(440px, calc(100% - 36px)); margin: 0; padding: 12px 14px; transform: translateY(18px); border: 1px solid #7890a8; border-radius: 10px; background: rgba(8, 14, 22, .98); box-shadow: 0 14px 36px rgba(0, 0, 0, .58), 0 0 0 1px rgba(255, 255, 255, .08); color: #f5f8fc; font-size: max(16px, 1rem); font-weight: 600; line-height: 1.45; opacity: 0; pointer-events: none; transition: opacity .18s ease, transform .18s ease; }
 .toast:not(.show) { display: none; }
 .toast.show { transform: translateY(0); opacity: 1; }

@@ -586,6 +586,7 @@ class PersistentChatStore:
             candidates = [
                 chat for chat in self.data["chats"]
                 if chat.get("window_id", "main") == window_id
+                and not chat.get("harness_parent")
                 and (chat.get("requested_provider") or chat.get("provider")) == provider
             ]
             if not candidates:

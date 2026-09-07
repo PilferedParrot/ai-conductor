@@ -1,0 +1,16 @@
+{
+  "harness": {
+    "preset": "claude-bounded",
+    "presets": {
+      "claude-bounded": {
+        "label": "Claude bounded work",
+        "provider": "claude",
+        "lead": {"provider": "claude", "model": "claude-sonnet-4-6", "reasoning_effort": "high"},
+        "worker": {"provider": "claude", "model": "claude-haiku-4-5", "reasoning_effort": "low"},
+        "escalation": [
+          {"provider": "claude", "model": "claude-sonnet-4-6", "reasoning_effort": "medium"}
+        ]
+      }
+    }
+  }
+}

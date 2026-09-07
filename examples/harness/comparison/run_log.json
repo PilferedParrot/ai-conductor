@@ -1,0 +1,7 @@
+{
+  "status": "not_started",
+  "benchmark_executed": false,
+  "entries": [],
+  "entry_schema": ["pair", "arm", "phase", "outcome", "details"],
+  "phases": ["briefing", "implementation", "verification", "review", "rework", "failure"]
+}

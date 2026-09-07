@@ -2174,13 +2174,19 @@ class DispatchCancellationTests(unittest.TestCase):
         finally:
             timer.cancel()
 
-    def test_stream_timeout_applies_while_child_is_not_reading_large_prompt(self):
+    def test_stream_process_can_be_cancelled_while_child_is_not_reading_large_prompt(self):
+        cancel = threading.Event()
+        timer = threading.Timer(0.15, cancel.set)
+        timer.start()
         started = time.monotonic()
-        with self.assertRaisesRegex(TimeoutError, "timed out"):
-            _stream_process(
-                ["/bin/sh", "-c", "sleep 30"], "x" * 2_000_000, Path.cwd(),
-                cancel_event=None, timeout_seconds=0.2, stdout_line=lambda _line: None,
-            )
+        try:
+            with self.assertRaises(RunCancelled):
+                _stream_process(
+                    ["/bin/sh", "-c", "sleep 30"], "x" * 2_000_000, Path.cwd(),
+                    cancel_event=cancel, stdout_line=lambda _line: None,
+                )
+        finally:
+            timer.cancel()
         self.assertLess(time.monotonic() - started, 3)
 
 

@@ -26,6 +26,7 @@ def append_run(
     run_id: str | None = None,
     chat_id: str | None = None,
     message_id: str | None = None,
+    harness_reference: list[str] | None = None,
 ) -> None:
     path = Path(path_value).expanduser()
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -44,6 +45,8 @@ def append_run(
         record["chat_id"] = chat_id
     if message_id is not None:
         record["message_id"] = message_id
+    if harness_reference is not None:
+        record["harness_reference"] = list(harness_reference)
     payload = (json.dumps(record, separators=(",", ":")) + "\n").encode("utf-8")
     flags = os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0)
     with _LEDGER_LOCK:

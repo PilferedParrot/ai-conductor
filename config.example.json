@@ -4,7 +4,9 @@
     "health_url": "http://127.0.0.1:8080/health",
     "allow_remote_egress": false,
     "model": "qwen3-coder-next",
-    "model_options": ["qwen3-coder-next"],
+    "model_options": [
+      "qwen3-coder-next"
+    ],
     "context_window_tokens": null,
     "context_window_percent": 100,
     "auto_start": false,
@@ -61,30 +63,45 @@
       }
     ],
     "context_window_tokens": null,
-    "context_window_percent": 100,
-    "request_timeout_seconds": 1800
+    "context_window_percent": 100
   },
   "antigravity": {
     "command": "agy",
     "model": "gemini-3.8-flash-low",
-    "mode": "accept-edits",
-    "request_timeout_seconds": 1800
+    "mode": "accept-edits"
   },
   "gemini": {
     "command": "gemini",
     "model": "auto",
     "model_options": [
-      {"value": "auto", "label": "Gemini Auto"},
-      {"value": "gemini-3-pro-preview", "label": "Gemini 3 Pro Preview"},
-      {"value": "gemini-3-flash-preview", "label": "Gemini 3 Flash Preview"},
-      {"value": "gemini-2.5-pro", "label": "Gemini 2.5 Pro"},
-      {"value": "gemini-2.5-flash", "label": "Gemini 2.5 Flash"},
-      {"value": "gemini-2.5-flash-lite", "label": "Gemini 2.5 Flash Lite"}
+      {
+        "value": "auto",
+        "label": "Gemini Auto"
+      },
+      {
+        "value": "gemini-3-pro-preview",
+        "label": "Gemini 3 Pro Preview"
+      },
+      {
+        "value": "gemini-3-flash-preview",
+        "label": "Gemini 3 Flash Preview"
+      },
+      {
+        "value": "gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro"
+      },
+      {
+        "value": "gemini-2.5-flash",
+        "label": "Gemini 2.5 Flash"
+      },
+      {
+        "value": "gemini-2.5-flash-lite",
+        "label": "Gemini 2.5 Flash Lite"
+      }
     ],
     "context_window_tokens": null,
     "context_window_percent": 100,
-    "approval_mode": "auto_edit",
-    "request_timeout_seconds": 1800
+    "approval_mode": "auto_edit"
   },
   "web": {
     "default_provider": "codex",
@@ -93,5 +110,9 @@
     "chat_reasoning_effort": "low",
     "chat_context_warning_chars": 80000,
     "technical_context_warning_chars": 120000
+  },
+  "harness": {
+    "preset": "manual",
+    "presets": {}
   }
 }

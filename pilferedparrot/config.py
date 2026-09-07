@@ -45,6 +45,8 @@ DEFAULTS: dict[str, Any] = {
     # OpenAI-compatible coding-agent adapter and names an environment variable
     # for credentials, so secrets never enter the dashboard store.
     "provider_definitions": {},
+    # Opt-in packages use explicit presets and preserve ordinary Work selection.
+    "harness": {"preset": "manual", "presets": {}},
     "qwen": {
         "base_url": "http://127.0.0.1:8080/v1",
         "health_url": "http://127.0.0.1:8080/health",
@@ -80,7 +82,6 @@ DEFAULTS: dict[str, Any] = {
         "sandbox": "workspace-write",
         "additional_write_dirs": [],
         "budget_timeout_seconds": 8,
-        "request_timeout_seconds": 1800,
     },
     "claude": {
         "command": "claude",
@@ -105,7 +106,6 @@ DEFAULTS: dict[str, Any] = {
         ],
         "context_window_tokens": None,
         "context_window_percent": 100,
-        "request_timeout_seconds": 1800,
     },
     "antigravity": {
         "command": "agy",
@@ -116,7 +116,6 @@ DEFAULTS: dict[str, Any] = {
         "context_window_tokens": None,
         "context_window_percent": 100,
         "mode": "accept-edits",
-        "request_timeout_seconds": 1800,
     },
     "gemini": {
         "command": "gemini",
@@ -132,7 +131,6 @@ DEFAULTS: dict[str, Any] = {
         "context_window_tokens": None,
         "context_window_percent": 100,
         "approval_mode": "auto_edit",
-        "request_timeout_seconds": 1800,
     },
     "web": {
         "host": "127.0.0.1",

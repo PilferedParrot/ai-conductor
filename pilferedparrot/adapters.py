@@ -345,9 +345,6 @@ class GeminiAdapter(ProviderAdapter):
             completed = _stream_process(
                 self._command(conversation), prompt, cwd,
                 cancel_event=event,
-                timeout_seconds=float(
-                    self.config.get("gemini", {}).get("request_timeout_seconds", 1800),
-                ),
                 stdout_line=receive,
             )
         finally:

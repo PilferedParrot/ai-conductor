@@ -91,9 +91,11 @@
         <div class="chat-meta">
           <div class="technical-heading">
             <div id="chatTitle" class="chat-title">New work session</div>
+            <button type="button" id="harnessReturn" class="harness-return" hidden>↩ Return to parent</button>
           </div>
           <button id="projectButton" class="project-path" disabled title="Change the folder this session is authorized to modify"></button>
         </div>
+        <button type="button" class="harness-button" id="harnessButton" aria-haspopup="dialog" aria-controls="harnessDialog">Harness</button>
       </header>
 
       <section class="conversation" id="conversation" aria-live="polite">
@@ -142,6 +144,23 @@
         <button value="cancel" class="secondary">Cancel</button>
         <button value="default" id="saveProject">Use folder</button>
       </div>
+    </form>
+  </dialog>
+  <dialog id="harnessDialog">
+    <form method="dialog" class="dialog-card harness-dialog-card" id="harnessForm">
+      <div class="harness-heading"><div><h2>Harness</h2><p>Define the work, launch it, inspect the artifact, then accept or retry.</p><p class="harness-flow" aria-label="Harness steps"><span>1 Define</span><span aria-hidden="true">→</span><span>2 Launch</span><span aria-hidden="true">→</span><span>3 Inspect</span><span aria-hidden="true">→</span><span>4 Accept or retry</span></p></div><button type="button" class="secondary" id="harnessClose">Close</button></div>
+      <details id="harnessEditor" open>
+        <summary id="harnessEditorHeading">New work package</summary>
+        <label>Exact task<textarea id="harnessTask" required rows="3" placeholder="Describe one independently reviewable task"></textarea></label>
+        <div class="harness-grid"><label>Category<select id="harnessCategory"><option>trivial</option><option selected>implementation</option><option>test</option><option>refactor</option><option>investigation</option><option>maintenance</option></select></label><label>Preset<select id="harnessPreset"></select></label></div>
+        <label>Input file references <span class="field-note">optional; one per line</span><textarea id="harnessInputs" rows="2" placeholder="path/to/input.py"></textarea></label>
+        <label>Allowed write scope <span class="field-note">optional for read-only work; one relative file or directory per line</span><textarea id="harnessWriteScope" rows="2" placeholder="path/to/output.py"></textarea></label>
+        <div class="harness-grid"><label>Acceptance check<textarea id="harnessAcceptance" required rows="2" placeholder="How will a lead or user independently verify it?"></textarea></label><label>Expected artifact (relative file)<input id="harnessArtifact" required placeholder="path/to/output.py"></label></div>
+        <label>Stop conditions<textarea id="harnessStop" required rows="2" placeholder="When must work stop or escalate?"></textarea></label>
+        <fieldset class="harness-estimates"><legend>Effort estimates <span class="field-note">points; leave unknown blank</span></legend><div class="harness-grid"><label>direct<input type="number" min="0" step="any" id="harnessEstimateDirect"></label><label>briefing<input type="number" min="0" step="any" id="harnessEstimateBriefing"></label><label>execution<input type="number" min="0" step="any" id="harnessEstimateExecution"></label><label>verification<input type="number" min="0" step="any" id="harnessEstimateVerification"></label><label>rework<input type="number" min="0" step="any" id="harnessEstimateRework"></label></div></fieldset>
+        <div class="dialog-actions"><button type="button" id="harnessPlan">Plan package</button></div>
+      </details>
+      <section id="harnessTasks" class="harness-tasks" aria-live="polite"></section>
     </form>
   </dialog>
   <dialog id="terminalDialog">

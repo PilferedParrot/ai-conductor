@@ -51,7 +51,7 @@ jobs:
         shell: pwsh
         run: |
           $SmokeDirectory = Join-Path $env:RUNNER_TEMP "Pilfered Parrot extracted"
-          Expand-Archive ./dist/PilferedParrot-0.6.1-windows-x64.zip -DestinationPath $SmokeDirectory
+          Expand-Archive ./dist/PilferedParrot-0.7.0-rc.1-windows-x64.zip -DestinationPath $SmokeDirectory
           $Executable = Join-Path $SmokeDirectory "PilferedParrot.exe"
           & $Executable --help
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -67,8 +67,8 @@ jobs:
       - name: Upload Windows package
         uses: actions/upload-artifact@65c4c4a1ddee5b72f698fdd19549f0f0fb45cf08 # v4.6.0
         with:
-          name: PilferedParrot-0.6.1-windows-x64
+          name: PilferedParrot-0.7.0-rc.1-windows-x64
           path: |
-            dist/PilferedParrot-0.6.1-windows-x64.zip
+            dist/PilferedParrot-0.7.0-rc.1-windows-x64.zip
             dist/SHA256SUMS
           if-no-files-found: error

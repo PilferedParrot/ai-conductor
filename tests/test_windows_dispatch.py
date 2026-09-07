@@ -43,7 +43,7 @@ class PortableDispatchTests(unittest.TestCase):
                             [sys.executable, "-u", "-c",
                              "import time; print('ready'); time.sleep(30)"],
                             "", Path(directory), cancel_event=cancelled,
-                            timeout_seconds=10, stdout_line=lambda _line: cancelled.set(),
+                            stdout_line=lambda _line: cancelled.set(),
                         )
                     self.assertEqual(len(children), 1)
                     self.assertIsNotNone(children[0].poll())

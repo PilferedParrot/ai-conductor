@@ -1,0 +1,14 @@
+{
+  "task": "Refactor is_positive_count to reuse is_positive_int, preserving results for booleans, non-integers, zero, negatives, and positive integers.",
+  "category": "refactor",
+  "inputs": [
+    "direct/labels.py",
+    "check_acceptance.py"
+  ],
+  "write_scope": [
+    "direct/labels.py"
+  ],
+  "acceptance_check": "python3 check_acceptance.py direct",
+  "artifact": "direct/labels.py",
+  "stop_conditions": "Stop after producing the bounded artifact and reporting the independent check; escalate if the brief requires wider edits."
+}

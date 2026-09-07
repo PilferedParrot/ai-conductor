@@ -72,7 +72,12 @@ and network behavior. PilferedParrot does not copy credentials into browser stat
 runs the official CLI flow in the background, automatically confirms its browser handoff when
 needed, and lets the CLI open the system's default browser. Provider sign-out clears that CLI's
 stored credentials and is therefore confirmed in the browser first. CLI credentials are shared by all PilferedParrot windows
-for the same OS user. There is no automatic provider router, delegator, or second-model review loop.
+for the same OS user. Harness is an explicit Work action using the same dashboard capability,
+window ownership checks and provider dispatch. Planning does not execute models. Its file references
+are validated against the project, including symlink resolution, but allowed write scope is an
+assignment contract rather than an OS file-level sandbox. Provider permissions remain authoritative.
+There is no automatic provider router or second-model review loop. Package records stay in the
+owner-only chat store; portable presets and examples contain no private state.
 
 Gemini likewise executes through its local CLI in headless mode and keeps Google's authentication,
 tool policy, and project-scoped session files under Gemini's control. PilferedParrot does not copy

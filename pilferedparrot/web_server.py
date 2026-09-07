@@ -70,6 +70,7 @@ class ServerApp(Protocol):
         self, chat_id: str, payload: dict[str, Any], *, window_id: str,
         window_provider: str | None,
     ) -> Any: ...
+    def harness_action(self, chat_id: str, payload: dict[str, Any], *, window_id: str, window_provider: str | None) -> Any: ...
     def set_context_window(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def set_reasoning_effort(self, chat_id: str, payload: dict[str, Any], *, window_id: str) -> Any: ...
     def activate_chat(self, chat_id: str, *, window_id: str) -> Any: ...
@@ -590,6 +591,11 @@ def make_handler(
                         name="pilferedparrot-window-close",
                         daemon=True,
                     ).start()
+                elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "harness":
+                    self._json(app.harness_action(
+                        parts[2], payload, window_id=window_id,
+                        window_provider=window_provider,
+                    ))
                 elif len(parts) == 4 and parts[:2] == ["api", "chats"] and parts[3] == "messages":
                     self._json(app.send_message(
                         parts[2], payload, window_id=window_id,

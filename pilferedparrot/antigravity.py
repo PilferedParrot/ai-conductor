@@ -175,8 +175,6 @@ class AntigravityAdapter(ProviderAdapter):
             completed = _stream_process(
                 self._command(conversation), self._input(prompt), cwd,
                 cancel_event=event,
-                timeout_seconds=float(self.config.get("antigravity", {}).get(
-                    "request_timeout_seconds", 1800)),
                 stdout_line=receive,
             )
         finally:
