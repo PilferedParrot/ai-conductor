@@ -1,19 +1,18 @@
 # PilferedParrot Interface
 
-> **v0.6.0 · stable Linux release and Windows 10/11 x64 preview**
+> **v0.6.1 · stable Linux release and Windows 10/11 x64 preview**
 >
-> The 0.6.1 source candidate fixes terminal visibility and shows the working folder and exact
-> command before execution. See [release notes](RELEASE_NOTES.md); downloads below remain 0.6.0
-> until the patch release is published.
+> Version 0.6.1 fixes terminal visibility and shows the working folder and exact command
+> before execution. See [release notes](RELEASE_NOTES.md).
 >
 > PilferedParrot Interface is a local interface for coding CLIs and compatible local or remote
 > models. It keeps the provider you choose visible while giving you one browser workspace for
 > technical work and provider-matched Chat.
 >
 > [Project page](https://pilferedparrot.github.io/PilferedParrot-Interface/) ·
-> [v0.6.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.0) ·
-> [Windows preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/PilferedParrot-0.6.0-windows-x64.zip) ·
-> [Source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.0/pilferedparrot-0.6.0-source.tar.gz) ·
+> [v0.6.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1) ·
+> [Windows preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.1/PilferedParrot-0.6.1-windows-x64.zip) ·
+> [Source archive](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/download/v0.6.1/pilferedparrot-0.6.1-source.tar.gz) ·
 > [Report a bug](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new?template=bug_report.yml) ·
 > [Share feedback](https://github.com/PilferedParrot/PilferedParrot-Interface/issues/new/choose)
 
@@ -22,7 +21,7 @@
 *Synthetic conversation shown for illustration; no real account or chat data is included.*
 
 Linux remains the stable, best-validated platform, with the strongest evidence on Linux Mint with
-X11. Version 0.6.0 also provides a portable Windows 10/11 x64 preview. The Windows executable
+X11. Version 0.6.1 also provides a portable Windows 10/11 x64 preview. The Windows executable
 bundles Python, needs no administrator rights, and uses Chrome, Chromium, or Microsoft Edge. Keep
 its console window open while it runs. Windows state is stored under `%LOCALAPPDATA%\PilferedParrot`
 and new projects default to `%USERPROFILE%\PilferedParrot Projects`.
@@ -71,7 +70,7 @@ disabled on Windows. The Python application has no third-party package dependenc
 
 ### Windows preview
 
-Download `PilferedParrot-0.6.0-windows-x64.zip` from the [v0.6.0 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.0),
+Download `PilferedParrot-0.6.1-windows-x64.zip` from the [v0.6.1 release](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.6.1),
 extract it to a directory you control, and run `PilferedParrot.exe`. The portable package includes
 Python and does not require installation or administrator rights. Keep the console open while the
 interface is running. On first launch, the app creates
@@ -90,7 +89,7 @@ On a Linux machine with Python 3.12 or later and Chrome or Chromium installed, o
 run:
 
 ```bash
-git clone --branch v0.6.0 https://github.com/PilferedParrot/PilferedParrot-Interface.git PilferedParrot-Interface
+git clone --branch v0.6.1 https://github.com/PilferedParrot/PilferedParrot-Interface.git PilferedParrot-Interface
 cd PilferedParrot-Interface
 cp config.example.json config.json
 ```

@@ -1,3 +1,24 @@
+# PilferedParrot Interface 0.6.1 release readiness — 2026-09-06
+
+Version 0.6.1 fixes native terminal visibility and command display on Linux and Windows.
+The command and working folder appear before execution or an interactive password prompt.
+The Windows terminal retains console input and output. Focus remains subject to the desktop.
+
+The terminal implementation at `22d71ea` passed all required CI checks on Python 3.12, 3.13,
+and 3.14, Playwright Chromium, Windows x64 packaging, and CodeQL. Linux CI discovered 490
+tests, with 34 browser tests run separately and two Windows-only cases exercised on Windows.
+Windows passed 38 focused platform tests and all 34 browser tests; the portable executable
+passed help and self-test checks. A native Linux/X11 check confirmed a visible terminal,
+command display before simulated input, accepted input, and restoration from minimized state.
+No actual password or privileged command was used. Final release documentation is checked
+on the release branch by the same required workflows.
+
+The source archive and Windows ZIP are distributed with SHA-256 checksums. Windows remains
+an unsigned preview. Native Windows 10/11 foreground behavior and Wayland focus were not
+interactively certified. Provider-account coverage remains the historical evidence below.
+
+## Earlier release evidence
+
 # PilferedParrot Interface 0.6.0 release readiness — 2026-09-05
 
 Version 0.6.0 retains the stable Linux release and adds a portable Windows 10/11 x64 preview.

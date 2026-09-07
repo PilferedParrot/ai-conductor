@@ -1,7 +1,7 @@
 PilferedParrot for Windows
 ==========================
 
-This is the PilferedParrot 0.6.1 Windows candidate preview for Windows 10/11 x64.
+This is the PilferedParrot 0.6.1 Windows preview for Windows 10/11 x64.
 The ZIP is portable: extract it anywhere and run PilferedParrot.exe.
 No Python installation or administrator rights are required.
 Install Google Chrome, Chromium, or Microsoft Edge to open the interface.
