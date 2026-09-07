@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import hmac
 import json
 import os
@@ -44,6 +43,7 @@ from .model import (
 )
 from .qwen import AGENT_SYSTEM_PROMPT, TOOL_DEFINITIONS, ensure_qwen
 from .response_identity import configured_identity
+from .terminal import launch_terminal, terminal_argv as _terminal_argv
 from .web_persistence import (
     DashboardModelStore, PersistentChatStore, chat_store_path,
     dashboard_capability_path, legacy_chat_store_path, load_dashboard_models,
@@ -451,32 +451,6 @@ def _fenced_code_block_details(content: str) -> list[tuple[str | None, str]]:
 
 def _fenced_code_blocks(content: str) -> list[str]:
     return [code for _language, code in _fenced_code_block_details(content)]
-
-
-def _terminal_argv(command: str, cwd: Path) -> list[str]:
-    """Build an interactive terminal command without interpolating shell input."""
-    if sys.platform == "win32":
-        shell = shutil.which("powershell.exe") or shutil.which("pwsh.exe")
-        if shell is None:
-            raise RuntimeError("PowerShell is required to open a command window")
-        encoded = base64.b64encode(command.encode("utf-16-le")).decode("ascii")
-        return [shell, "-NoLogo", "-NoProfile", "-NoExit", "-EncodedCommand", encoded]
-    shell = shutil.which("bash") or "/bin/bash"
-    script = (
-        'cd -- "$1" || exit; bash -lc "$2"; status=$?; '
-        'printf "\\nCommand exited with status %s.\\n" "$status"; exec bash'
-    )
-    terminal = shutil.which("gnome-terminal")
-    if terminal:
-        return [
-            terminal, "--", shell, "-lc", script, "pilferedparrot-terminal", str(cwd), command,
-        ]
-    terminal = shutil.which("x-terminal-emulator") or shutil.which("xterm")
-    if terminal:
-        return [
-            terminal, "-e", shell, "-lc", script, "pilferedparrot-terminal", str(cwd), command,
-        ]
-    raise RuntimeError("no supported graphical terminal was found")
 
 
 def _loopback_host(value: str) -> bool:
@@ -2268,12 +2242,7 @@ class PilferedParrotApp:
             raise ValueError(f"project folder does not exist: {cwd}")
         if sys.platform == "win32" and language in {"bash", "sh", "zsh", "fish"}:
             raise ValueError("This command requires a Unix shell; use a PowerShell command on Windows")
-        subprocess.Popen(
-            _terminal_argv(command, cwd), cwd=cwd, stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            start_new_session=True, close_fds=True,
-            **({"creationflags": subprocess.CREATE_NEW_CONSOLE} if sys.platform == "win32" else {}),
-        )
+        launch_terminal(command, cwd)
 
     def provider_auth_action(self, provider: str, action: str) -> dict[str, Any]:
         """Launch a provider-owned browser sign-in or clear its stored CLI login."""
