@@ -1,9 +1,9 @@
 # Harness preview verification — 2026-09-06
 
 This preview integrates the local Harness and provider-lifetime changes with the published
-0.6.1 Linux/Windows source. The original development checkout and private state were backed up
-before integration. Shared configuration stays manual; provider credentials and global model
-settings are unchanged.
+0.6.1 Linux/Windows source. Modified source files from the original development checkout were
+backed up before integration. Personal configuration and session state were left untouched.
+Shared configuration stays manual; provider credentials and global model settings are unchanged.
 
 ## Checks
 
