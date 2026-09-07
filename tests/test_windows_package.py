@@ -81,7 +81,7 @@ class WindowsPackageSourceTests(unittest.TestCase):
 
     def test_versioned_archive_and_executable_names_are_fixed(self):
         build = (ROOT / "packaging/windows/build.ps1").read_text()
-        self.assertIn('$Version = "0.6.1"', build)
+        self.assertIn('$Version = "0.7.0-rc.1"', build)
         self.assertIn("PilferedParrot-$Version-windows-x64.zip", build)
         self.assertIn('PilferedParrot.exe', build)
 

@@ -75,7 +75,9 @@ listed in that diagnostic using your distribution’s package manager, then reru
 - Keep commits scoped and use an identity you are comfortable publishing.
 - Confirm that no generated files or private data appear anywhere in the submitted history.
 - Do not weaken provider sandboxing, loopback checks, or CSRF checks without explicit discussion.
-- Do not add automatic routing, delegation, second-model review, or repeated prompt wrappers as a
-  convenience feature; those change the product's token and trust model.
+- Harness work packages use explicit presets, prospective estimates and operator launch. Keep
+  their behavior in the product's existing sessions and provider adapters; see [the canonical
+  harness guide](docs/harness.md). Do not add hidden routing, automatic second-model review,
+  recursive schedulers or repeated policy wrappers. These change the token and trust model.
 
 By contributing, you agree that your contribution is licensed under the Apache License 2.0.

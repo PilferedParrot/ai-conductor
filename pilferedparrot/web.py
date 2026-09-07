@@ -37,6 +37,8 @@ from .config import (
 from .dispatch import RunCancelled, RunResult, capture_dispatch, _stop_process
 from .processes import provider_argv
 from .ledger import append_run
+from .harness import metric, outcome_summary, render_handoff
+from .web_harness import HarnessWorkflow
 from .model import (
     Conversation, PROVIDER_CATALOG, PROVIDERS, ProviderBudget,
     provider_catalog, provider_ids,
@@ -70,7 +72,7 @@ CODE_BLOCK_LANGUAGES = frozenset({
     "bash", "console", "fish", "powershell", "shell", "sh", "terminal", "zsh",
 })
 ABSOLUTE_PATH = re.compile(r"(?<![\w.])(/[^\s`'\"<>|]+)")
-API_GENERATION = 20
+API_GENERATION = 21
 CHAT_MODEL_OPTIONS = ("gpt-5.6-terra", "gpt-5.6-luna")
 MESSAGE_MAX_CHARS = 40_000
 PROVIDER_LABELS = {item["id"]: item["label"] for item in PROVIDER_CATALOG}
@@ -533,7 +535,7 @@ _dashboard_capability_path = dashboard_capability_path
 _pilferedparrot_dashboard_capability = read_dashboard_capability
 
 
-class PilferedParrotApp:
+class PilferedParrotApp(HarnessWorkflow):
     def __init__(self, config: dict[str, Any], default_cwd: Path):
         self.config = config
         self.default_cwd = default_cwd
@@ -706,6 +708,7 @@ class PilferedParrotApp:
                         "error": True,
                         "interrupted": True,
                     })
+                    self._harness_complete(message)
                     message.pop("pending", None)
                     message.pop("cancel_requested", None)
                     recovered += 1
@@ -725,6 +728,17 @@ class PilferedParrotApp:
                 message.pop("cancel_requested", None)
                 recovered += 1
                 chat_thread["updated_at"] = int(time.time())
+            for work in self.store.data["chats"]:
+                for task in work.get("harness_tasks", []):
+                    if task.get("status") == "running":
+                        task["status"] = "failed"
+                        if task.get("attempts"):
+                            attempt = task["attempts"][-1]
+                            attempt["status"] = "failed"
+                            attempt["elapsed_seconds"] = metric(None, unit="seconds")
+                            attempt["failure_reason"] = "application restarted before completion was recorded"
+                        task["summary"] = outcome_summary(task.get("attempts", []))
+                        recovered += 1
             if recovered:
                 self.store.save()
         return recovered
@@ -1228,6 +1242,7 @@ class PilferedParrotApp:
             },
             "providers": [deepcopy(item) for item in self._provider_catalog()],
             "provider_templates": self.provider_templates(),
+            "harness": self.harness_metadata(),
             "model_catalog": deepcopy(catalog),
             "preferences": self.store.preferences_public(),
         }
@@ -1508,12 +1523,15 @@ class PilferedParrotApp:
             if chat_id in self.runs:
                 raise ValueError("cancel the running response before deleting this work session")
             with self.store.lock:
-                self._owned_chat(chat_id, window_id)
+                chat = self._owned_chat(chat_id, window_id)
+                if any(task.get("status") == "running" for task in chat.get("harness_tasks", [])):
+                    raise ValueError("cancel the running harness package before deleting its parent")
             self.store.delete(chat_id)
 
     def send_message(
         self, chat_id: str, payload: dict[str, Any], *,
         window_id: str | None = None, window_provider: str | None = None,
+        _harness_attempt: tuple[str, str, str] | None = None,
     ) -> dict[str, Any]:
         prompt = str(payload.get("content") or "").strip()
         if not prompt:
@@ -1527,6 +1545,12 @@ class PilferedParrotApp:
                 raise ValueError("this work session is already running")
             with self.store.lock:
                 chat = self._owned_chat(chat_id, window_id)
+                if chat.get("harness_parent") and _harness_attempt is None:
+                    raise ValueError("review or retry this bounded package from its parent session")
+                if _harness_attempt is None and any(
+                    task.get("status") == "running" for task in chat.get("harness_tasks", [])
+                ):
+                    raise ValueError("wait for the active harness package")
                 if any(message.get("pending") for message in chat["messages"]):
                     raise ValueError("this work session is already running")
                 provider = str(window_provider or payload.get("provider")
@@ -1537,7 +1561,11 @@ class PilferedParrotApp:
                     else chat.get("requested_model")
                 requested_model = self._normalize_model(model_value)
                 selected_model = requested_model or effective_model(self.config, provider)
-                if "reasoning_effort" in payload:
+                if _harness_attempt is not None and provider == "claude":
+                    # Validated by the selected harness policy. Ordinary Claude
+                    # composer defaults retain their existing behavior.
+                    reasoning_effort = payload.get("reasoning_effort")
+                elif "reasoning_effort" in payload:
                     reasoning_effort = self._selected_reasoning_effort(
                         provider, selected_model, payload.get("reasoning_effort"),
                     )
@@ -1549,7 +1577,7 @@ class PilferedParrotApp:
                         )
                     except ValueError:
                         reasoning_effort = None
-                if requested_model:
+                if requested_model and not chat.get("harness_parent"):
                     self.store.data["preferences"]["work_models"][provider] = requested_model
                 same_session = provider == chat.get("provider") \
                     and selected_model == chat.get("model")
@@ -1616,6 +1644,13 @@ class PilferedParrotApp:
                     "provider": provider,
                     "reasoning_effort": reasoning_effort,
                 }
+                if _harness_attempt is not None:
+                    pending["harness_reference"] = list(_harness_attempt)
+                    _, task, attempt = self._harness_reference(_harness_attempt)
+                    attempt["message_id"] = pending["id"]
+                    attempt["run_id"] = pending["run_id"]
+                    pending["harness_contract"] = deepcopy(task["contract"])
+                    pending["harness_route"] = deepcopy(task["route"])
                 chat["messages"].append(pending)
                 chat["updated_at"] = now
                 self.store.mark_used(chat)
@@ -1653,6 +1688,8 @@ class PilferedParrotApp:
         provider: str | None = None
         budgets: dict[str, ProviderBudget] = {}
         conversation: Conversation | None = None
+        result: RunResult | None = None
+        started = time.monotonic()
         try:
             with self.store.lock:
                 chat = self.store.get(chat_id)
@@ -1686,6 +1723,13 @@ class PilferedParrotApp:
                 run_config["codex"]["reasoning_effort"] = reasoning_effort
             if provider == "codex" and context_limit is not None:
                 run_config["codex"]["context_window_limit_tokens"] = context_limit
+            pending_snapshot = self._message(chat, pending_id)
+            if pending_snapshot.get("harness_reference"):
+                run_config["_harness"] = {"bounded": True}
+                run_config[provider]["reasoning_effort"] = reasoning_effort
+                if provider == "codex" and not pending_snapshot["harness_contract"]["write_scope"]:
+                    run_config["codex"]["sandbox"] = "read-only"
+                prompt = render_handoff(pending_snapshot["harness_contract"], pending_snapshot["harness_route"])
             conversation = Conversation(
                 provider=provider,
                 response_identity=configured_identity(run_config, provider),
@@ -1782,6 +1826,7 @@ class PilferedParrotApp:
                     session_id=conversation.provider_session_id, budgets=budgets,
                     exit_code=result.exit_code, run_id=pending["run_id"],
                     chat_id=chat_id, message_id=pending_id,
+                    harness_reference=pending.get("harness_reference"),
                 )
             except OSError as error:
                 print(f"[web] could not append run ledger: {error}")
@@ -1808,6 +1853,7 @@ class PilferedParrotApp:
                     pending = self._message(chat, pending_id)
                     if conversation is not None:
                         pending["response_identity"] = deepcopy(conversation.response_identity)
+                    self._harness_complete(pending, result, time.monotonic() - started)
                     pending.pop("pending", None)
                     pending.pop("cancel_requested", None)
                     chat["updated_at"] = int(time.time())

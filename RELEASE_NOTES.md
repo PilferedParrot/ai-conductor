@@ -1,3 +1,27 @@
+## PilferedParrot Interface 0.7.0-rc.1 preview
+
+Removed the 30-minute total runtime cutoff for Codex, Claude, Gemini, and Antigravity jobs.
+Long-running jobs now continue until the provider exits, the operator cancels, or the app shuts
+down. Legacy provider `request_timeout_seconds` settings no longer terminate jobs; explicit
+cancellation remains available, including when a provider is silent or not reading its input.
+
+The preview integrates the 0.6.1 Linux/Windows terminal fixes. It keeps stable downloads on 0.6.1.
+
+### Bounded agent harness
+
+Work now includes an explicit Harness workflow for economical delegation. It provides configurable
+Sol/Luna and custom routing, compact contracts, fresh worker sessions, bounded evidence-based retries,
+artifact verification records and conservative outcome measurement in existing session storage.
+The provider adapters retain execution and permissions; no legacy hooks or maintenance queue are
+restored. See [setup and limits](docs/harness.md), [migration](docs/harness-migration.md), and
+[baseline evidence](docs/harness-baseline.md). Existing Work and Chat sessions remain compatible.
+
+Package status now names the next action, completed workers return directly to parent review,
+and the interface explains when the three-attempt limit requires a new approach. Acceptance
+is an operator-recorded verdict, with its evidence visible. Six contained Codex fixture runs
+passed independent checks and lead review without retries; this establishes functional coverage,
+not savings. See [comparison evidence and limits](docs/harness-comparison-results.md).
+
 # PilferedParrot Interface 0.6.1 release notes
 
 Version 0.6.1 fixes terminal visibility and command display. Terminal actions request a normal-size visible

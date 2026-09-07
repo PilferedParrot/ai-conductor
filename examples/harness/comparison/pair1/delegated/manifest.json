@@ -1,0 +1,14 @@
+{
+  "task": "Implement normalize(text) for newline-delimited labels: trim each line, drop blanks, deduplicate in first-seen order, preserve case.",
+  "category": "implementation",
+  "inputs": [
+    "delegated/labels.py",
+    "check_acceptance.py"
+  ],
+  "write_scope": [
+    "delegated/labels.py"
+  ],
+  "acceptance_check": "python3 check_acceptance.py delegated",
+  "artifact": "delegated/labels.py",
+  "stop_conditions": "Stop after producing the bounded artifact and reporting the independent check; escalate if the brief requires wider edits."
+}

@@ -1,5 +1,8 @@
 # PilferedParrot Interface
 
+This checkout is the **0.7.0-rc.1 Harness preview**. [Try the preview](https://github.com/PilferedParrot/PilferedParrot-Interface/releases/tag/v0.7.0-rc.1)
+for bounded handoffs and artifact review. The stable download links below remain on 0.6.1.
+
 > **v0.6.1 · stable Linux release and Windows 10/11 x64 preview**
 >
 > Version 0.6.1 fixes terminal visibility and shows the working folder and exact command
@@ -35,6 +38,9 @@ Google Antigravity currently supports **Work** only; other provider accounts and
 endpoints require your own setup and credentials. See [provider compatibility](docs/provider-compatibility.md)
 and the [provider validation notes](docs/provider-expansion-validation.md) for current limits.
 
+Work also includes an explicit [Harness workflow](docs/harness.md) for bounded task handoffs,
+model presets, artifact review and outcome records, using the existing provider tools and permissions.
+
 ## What it supports
 
 PilferedParrot is a local browser interface for coding engines and compatible model APIs:
@@ -52,8 +58,8 @@ PilferedParrot is a local browser interface for coding engines and compatible mo
   or through the Google AI Studio API template. Consumer Google sign-in no longer provides
   Gemini CLI access; see [provider compatibility](docs/provider-compatibility.md).
 
-The operator chooses the provider. PilferedParrot does not ask one model to route, delegate, review,
-or adjudicate another model's work.
+The operator chooses the provider. Harness applies an explicit, configurable delegation policy
+locally; planning and recording reviews use no model calls.
 
 The browser also opens **Chat** in its own floating window, powered by a separate read-only session
 from a supported provider active in the work window that opened it. Chat offers that provider's model menu;
@@ -120,6 +126,11 @@ known legacy state files and browser profile into the new directory without over
 Closing the last PilferedParrot work window stops its local server and cancels any active provider
 run; closing only the optional Chat window does not.
 
+Codex, Claude, Gemini, and Antigravity jobs have no total runtime limit imposed by PilferedParrot.
+They can continue through long tasks and periods without output until the provider exits, you cancel,
+or the application shuts down. Legacy `request_timeout_seconds` settings for these providers are
+ignored. Network requests, startup checks, and individual tools retain their own timeout behavior.
+
 Use **Providers** in the sidebar to open the provider dashboard. It shows connection state, lets you
 choose a model, and can start another maximized app window with that fixed provider and model.
 Every LLM integration is one card. Use **Add provider** to add xAI/Grok, OpenRouter,
@@ -178,6 +189,35 @@ Session history uses the sidebar's available space. Expand **Context window** fo
 and context limits, or **Preferences** for notifications and appearance. The collapsed context
 summary keeps estimated usage visible without occupying a full settings panel.
 
+The model picker sits beside **Reasoning** at the bottom of the composer in both work and Chat.
+For Codex, choose a supported effort for the next message; the choice is saved with that session
+and can change between turns without resetting the conversation. **Codex default** leaves work
+sessions on the configured `codex.reasoning_effort`, or the CLI's settings when no override is set.
+**Chat default** uses `web.chat_reasoning_effort` (low by default), independently of the CLI's default.
+These choices do not rewrite your Codex terminal configuration. Supported levels come from Codex's
+local model catalog, with low/medium/high as a fallback when metadata is absent. A structured
+Codex `model_options` entry can override `reasoning_efforts`; an empty array hides the control.
+Providers without a supported reasoning control keep their model picker alone. Switching to a model
+that cannot use the selected effort resets reasoning to Default.
+
+New work sessions inherit the model and reasoning choice from the most recently used session in
+that provider window, including an explicit Default choice. These choices survive restarting PPI;
+an incompatible inherited reasoning level resets to Default when choosing another model.
+
+Expand **Response details** beneath a new Work or Chat reply to inspect its requested model and
+destination. Compatible APIs also record the model IDs returned by the server, including tool-loop
+responses. Requested and reported identifiers are neutral details: aliases and model-file paths
+can name the same model differently, so a text difference does not trigger a mismatch warning.
+Local models receive their configured provider, model, and endpoint information in the system
+prompt. A loopback destination shows that PPI contacted this machine, but a proxy can forward the
+request elsewhere. Server-reported IDs and the model's own description do not independently prove
+the loaded weights. CLI replies show the configured request without a server-reported model ID;
+older replies have no routing record.
+
+Session history uses the sidebar's available space. Expand **Context window** for token estimates
+and context limits, or **Preferences** for notifications and appearance. The collapsed context
+summary keeps estimated usage visible without occupying a full settings panel.
+
 The browser shows:
 
 - three independent spaces for usage/history, technical work, and optional provider-matched Chat;
@@ -195,6 +235,24 @@ The browser shows:
 The project folder shown in the header is the primary writable workspace. Change it before the
 first message when starting work in another checkout. PilferedParrot rejects a clear first-turn request
 to modify a different, unapproved project before spending a provider turn.
+
+### Use and share the harness
+
+Open **Harness** in the Work toolbar. Select a routing preset, describe one bounded task and its
+independent acceptance check, then estimate direct effort and delegation overhead. **Plan package**
+shows the contract and requested route before **Launch**. Trivial work and unknown or unfavorable
+estimates stay on the lead. Delegated work gets a fresh child session; return to the parent to
+inspect the artifact and record acceptance or an evidence-based retry.
+
+The optional **Sol / Luna** preset requests Sol/high for the lead and Luna/medium for the first
+worker. Other users can configure their own explicit models and reasoning levels. Shared defaults
+start in manual mode, and a fresh installation needs no personal skills, registry or session files.
+
+Start with the [setup and operation guide](docs/harness.md), [portable examples](examples/harness),
+and [migration inventory](docs/harness-migration.md). The [bounded baseline](docs/harness-baseline.md)
+reports observed routing and its limits; [three prepared comparison pairs](examples/harness/comparison)
+support a later direct-versus-delegated experiment. Private configuration and session records stay
+local. See [implementation verification](docs/harness-verification.md) for the tested scope.
 
 ### Safe Markdown rendering
 
@@ -294,9 +352,9 @@ per-turn token and context usage, capabilities, authentication, execution availa
 reporting availability, and model discovery. Codex, Claude, Gemini, Antigravity, and OpenAI-compatible endpoints
 retain separate implementations behind that contract.
 
-- A Codex turn receives the user's prompt directly. PilferedParrot does not prepend a policy document,
-  route request, reviewer brief, or hidden board content. Chat is informational and does not interpret,
-  rewrite, or relay technical requests.
+- An ordinary Codex turn receives the user's prompt directly. An explicitly launched Harness
+  package receives its compact, visible contract once for that attempt. Chat is informational and
+  does not interpret, rewrite, or relay technical requests.
 - Continuing with the same provider and model resumes that provider session. A new conversation,
   provider change, or model change starts fresh context.
 - Chat has its own persisted, read-only provider session. It inherits the provider and selected model

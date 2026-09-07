@@ -1,0 +1,14 @@
+{
+  "task": "Write at least one unittest regression distinguishing parse_count(0) from parse_count(None). It must fail the seeded function and pass the independently supplied correction; do not fix labels.py in this package.",
+  "category": "test",
+  "inputs": [
+    "direct/labels.py",
+    "check_acceptance.py"
+  ],
+  "write_scope": [
+    "direct/test_labels.py"
+  ],
+  "acceptance_check": "python3 check_acceptance.py direct",
+  "artifact": "direct/test_labels.py",
+  "stop_conditions": "Stop after producing the bounded artifact and reporting the independent check; escalate if the brief requires wider edits."
+}
