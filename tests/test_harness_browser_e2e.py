@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import unittest
 
+from pilferedparrot.harness import render_handoff
+
 try:
     from playwright.sync_api import expect, sync_playwright
 except ModuleNotFoundError:
@@ -120,6 +122,22 @@ class HarnessBrowserEndToEndTests(unittest.TestCase):
         expect(self.page.get_by_text("Accepted", exact=True)).to_be_visible()
         expect(self.page.locator(".harness-attempt").last).to_contain_text("Independent comparison found the expected line")
         expect(self.page.locator(".harness-attempt").last).to_contain_text("Review: 8 seconds (estimated)")
+
+    def test_returning_before_worker_completion_opens_parent_progress_and_review(self):
+        self.plan()
+        parent_id = self.page.evaluate("activeChat().id")
+        task = self.fixture.app.chat_state(parent_id)["harness_tasks"][0]
+        handoff = render_handoff(task["contract"], task["route"])
+        self.fixture.provider.hold(handoff)
+
+        self.page.get_by_role("button", name="Launch").click()
+        expect(self.page.get_by_role("button", name="Return to parent")).to_be_visible(timeout=5_000)
+        self.page.get_by_role("button", name="Return to parent").click()
+        expect(self.page.locator("#harnessDialog")).to_be_visible()
+        expect(self.page.get_by_text("In progress", exact=True)).to_be_visible()
+
+        self.fixture.provider.complete(handoff)
+        expect(self.page.get_by_text("Ready for review", exact=True)).to_be_visible(timeout=5_000)
 
     def test_unchanged_retry_uses_terra_escalation(self):
         self.plan()

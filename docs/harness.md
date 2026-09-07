@@ -59,7 +59,8 @@ credential, global instruction file, or model catalog is rewritten by selecting 
    fresh work session with a parent link and no inherited conversation. It receives the same
    compact contract and file references, not a copied transcript. Project/provider instructions
    can still be loaded by the CLI. Worker choices do not become the defaults for new lead sessions.
-   Return to the parent when the worker finishes; the interface opens its package review.
+   Return to the parent at any time to open its package progress; when the worker finishes,
+   the same view updates to artifact review.
 7. Inspect the artifact and the independently specified check. Record evidence and Accept or
    Reject. A successful provider exit only means **awaiting_review**. Acceptance requires an
    existing artifact file; the review records its SHA-256 and size. For an artifact over 16 MB,

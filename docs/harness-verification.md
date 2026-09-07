@@ -7,8 +7,8 @@ settings are unchanged.
 
 ## Checks
 
-Full unittest discovery on Linux with Python 3.14.7 and mandatory Playwright discovered **525
-tests: 523 passed, no failures, two native-Windows cases skipped on Linux**. Python parsing, all
+Full unittest discovery on Linux with Python 3.14.7 and mandatory Playwright discovered **526
+tests: 524 passed, no failures, two native-Windows cases skipped on Linux**. Python parsing, all
 browser JavaScript syntax, JSON duplicate-key validation and whitespace checks passed. Mandatory
 Playwright uses isolated loopback servers, synthetic provider streams and disposable browser state.
 The native Windows console cases run in the required Windows CI job.
@@ -17,7 +17,8 @@ Independent backend review covered contract/path validation, provider permission
 launch registration, cancellation, restart recovery, bounded retries, additive persistence and
 conservative usage summaries. Frontend review inspected the desktop and narrow renders and tested
 planning, direct/delegated execution, worker return, review, retry, acceptance, reload and the
-three-attempt limit. Typed review drafts and disclosure state remain stable during redraws.
+three-attempt limit. A gated-worker regression verifies early parent return shows progress and updates to review
+without another click. Typed review drafts and disclosure state remain stable during redraws.
 
 The real Codex comparison ran six isolated fixture arms. All passed unchanged acceptance checks
 and independent lead artifact review with no retries or substitutions. See [the full pilot record](harness-comparison-results.md)

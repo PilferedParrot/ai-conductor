@@ -851,7 +851,9 @@ function renderHeader() {
       await refreshState();
       if (!activeChat() || activeChat().id !== parent.chat_id) {
         toast("The parent session is no longer available.");
-      } else if (workerFinished) {
+      } else {
+        // Opening the parent package is useful while the worker is still
+        // running, and lets its status change to review-ready in place.
         renderHarnessPresets();
         renderHarnessTasks();
         $("#harnessDialog").showModal();
